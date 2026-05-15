@@ -48,6 +48,11 @@ from typing import Dict, List, Optional
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 JOURNAL_FILE = os.path.join(_PROJECT_ROOT, "logs", "signal_journal.jsonl")
 
+# Engine version stamp — bump on any signal-logic change so accuracy can be
+# measured per-engine and old (broken) signals never pollute new stats.
+# Entries without this field = legacy pre-Phase-A..D engine.
+ENGINE_VERSION = "v2-phaseABCD-2026.05.15"
+
 _lock = threading.Lock()
 _seq_counters: Dict[str, int] = {}
 
@@ -113,6 +118,7 @@ def record_signal(signal: Dict) -> str:
         "ai_prob":      float(signal.get("ai_probability", signal.get("ai_prob", 0.5))),
         "grade":        signal.get("confluence_grade", "C"),
         "ts":           signal.get("ts", datetime.now().isoformat()),
+        "engine_version": ENGINE_VERSION,
         # option leg fields (None when chain unavailable at signal-gen time)
         "option_strike": _opt_float(signal.get("option_strike")),
         "option_expiry": signal.get("option_expiry", None),
