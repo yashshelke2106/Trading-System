@@ -58,7 +58,11 @@ TUNABLE_PARAMS: Dict[str, Tuple[float, float, float, float, str]] = {
     # RSI 30-50 is bearish momentum — shorts should work there.
     "rsi_short_floor":        (30,   20,   40,   2,    "SIGNAL_CONFIG"),
     # Adaptive RR: reduce when SL hits >> target hits (brings target closer).
-    "rr_ratio":               (2.0,  1.5,  3.0,  0.1,  "SIGNAL_CONFIG"),
+    # rr_ratio floor lifted to 2.5: a 1.5-2.0R target on a ~1% SL caps the
+    # stock move at ~1.2% (journal median) → ~15% premium, never the 50%
+    # goal. Floor 2.5R x 1.2% SL = 3% stock ≈ 40-50% premium. Ceil 5.0R for
+    # genuine trend/top-mover runners.
+    "rr_ratio":               (3.0,  2.5,  5.0,  0.25, "SIGNAL_CONFIG"),
     "vol_surge_threshold":    (1.5,  1.2,  3.0,  0.1,  "SIGNAL_CONFIG"),
     # Capped at 50: top movers often have moderate strength scores. Multi-TF enforces quality.
     "min_strength":           (35,   25,   50,   5,    "SIGNAL_CONFIG"),
@@ -67,8 +71,11 @@ TUNABLE_PARAMS: Dict[str, Tuple[float, float, float, float, str]] = {
     # Time filters — MetaLearning can adjust based on hour WR data
     "block_after_hour":       (12,   11,   14,   1,    "SIGNAL_CONFIG"),
     "skip_first_minutes":     (15,   10,   30,   5,    "SIGNAL_CONFIG"),
-    # SL band — avg_loss >> avg_win means SL too wide
-    "max_sl_pct":             (0.012, 0.006, 0.020, 0.002, "RISK_CONFIG"),
+    # SL band. OLD floor 0.006 (0.6%) was the death spiral: loss-heavy data
+    # → learner tightens SL → targets shrink → tiny fake "wins" → tighten
+    # more. A 0.6% SL gives the trade no room and caps target ~1.2%. Floor
+    # 1.2%, ceil 3.5% so high-ATR stocks + runners can breathe.
+    "max_sl_pct":             (0.020, 0.012, 0.035, 0.002, "RISK_CONFIG"),
     # Scoring component weights — applied by timeframe_sync._grade()
     "score_1d_confirm":       (35,   20,   50,   5,    "SCORING_WEIGHTS"),
     "score_15m_confirm":      (25,   15,   35,   5,    "SCORING_WEIGHTS"),

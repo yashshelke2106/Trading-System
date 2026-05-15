@@ -30,7 +30,7 @@ DEFAULT_REGIME_PARAMS: Dict[str, Dict] = {
         "rsi_long_momentum_min": 50,
         "rsi_short_floor": 35,  # shorts allowed unless extreme oversold (even in bull, reversals happen)
         "max_volume_ratio": 4.0,
-        "rr_ratio": 1.5,
+        "rr_ratio": 3.5,
         "disable_shorts": False,
     },
     "bull": {
@@ -39,7 +39,7 @@ DEFAULT_REGIME_PARAMS: Dict[str, Dict] = {
         "rsi_long_momentum_min": 55,
         "rsi_short_floor": 32,  # shorts need clear bearish momentum, not just neutral RSI
         "max_volume_ratio": 3.5,
-        "rr_ratio": 1.3,
+        "rr_ratio": 3.0,
         "disable_shorts": False,
     },
     "neutral": {
@@ -48,7 +48,7 @@ DEFAULT_REGIME_PARAMS: Dict[str, Dict] = {
         "rsi_long_momentum_min": 60,
         "rsi_short_floor": 30,  # symmetric: shorts as easy as longs in neutral regime
         "max_volume_ratio": 3.0,
-        "rr_ratio": 1.2,
+        "rr_ratio": 2.5,
         "disable_shorts": False,
     },
     "bear": {
@@ -57,7 +57,7 @@ DEFAULT_REGIME_PARAMS: Dict[str, Dict] = {
         "rsi_long_momentum_min": 65,  # longs need high RSI in bear
         "rsi_short_floor": 25,        # shorts very easy in bear — almost no RSI floor
         "max_volume_ratio": 2.5,
-        "rr_ratio": 1.5,
+        "rr_ratio": 3.5,
         "disable_shorts": False,
     },
     "strong_bear": {
@@ -66,7 +66,7 @@ DEFAULT_REGIME_PARAMS: Dict[str, Dict] = {
         "rsi_long_momentum_min": 68,  # very high bar for longs
         "rsi_short_floor": 20,        # shorts essentially unrestricted in strong bear
         "max_volume_ratio": 2.0,
-        "rr_ratio": 1.7,
+        "rr_ratio": 3.5,
         "disable_shorts": False,
     },
     "volatile": {
@@ -75,7 +75,7 @@ DEFAULT_REGIME_PARAMS: Dict[str, Dict] = {
         "rsi_long_momentum_min": 65,
         "rsi_short_floor": 30,  # was 50 — killed all shorts in volatile. Both directions valid
         "max_volume_ratio": 2.5,
-        "rr_ratio": 1.5,
+        "rr_ratio": 3.5,
         "atr_sl_multiplier": 1.5,   # wider SL for volatility
         "disable_shorts": False,
     },

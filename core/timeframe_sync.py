@@ -919,6 +919,19 @@ class TimeframeSyncEngine:
         except Exception:
             _learned_sig, _learned_risk = {}, {}
         max_sl_pct = float(_learned_risk.get("max_sl_pct", 0.025))
+        # Top movers earn wider stops + bigger runners — signal_engine applies
+        # these in its own path, but timeframe_sync builds the actual T1/T2 so
+        # the override must be applied HERE too or movers get capped at 3.0R.
+        if is_top_mover and mover_class != 'normal':
+            try:
+                from core.top_mover_mode import get_override_config
+                _ov = get_override_config(mover_class)
+                if "max_sl_pct" in _ov:
+                    max_sl_pct = float(_ov["max_sl_pct"])
+                if "rr_ratio" in _ov:
+                    _learned_sig = {**_learned_sig, "rr_ratio": float(_ov["rr_ratio"])}
+            except Exception:
+                pass
         # Cap min_sl_dist below max so clamp logic stays sane
         max_sl_dist = entry * max_sl_pct
         if min_sl_dist > max_sl_dist:
