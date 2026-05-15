@@ -266,12 +266,49 @@ def check_outcomes(lot_sizes: Dict[str, int] = None) -> Tuple[int, int, int]:
                     current_prem = max(current_prem, entry_prem_f * 0.05)
 
             if sig_age_h > MAX_SIGNAL_AGE_HOURS:
-                exit_p = current_prem if current_prem > 0 else entry_prem_f
-                resolve_signal(sig["signal_id"], "EXPIRED",
-                               float(sig.get("entry_price", 0)), lot_size=lot, exit_prem=exit_p)
-                _write_paper_trade(sig, "EXPIRED",
-                                   float(sig.get("entry_price", 0)), lot, exit_prem=exit_p)
-                expired += 1
+                # Walk SPOT forward for the REAL outcome, then map to premium
+                # via delta. Old stub used last-known/entry premium → pnl=0
+                # garbage that poisoned the adaptive learner.
+                try:
+                    from core.exit_replay import replay_exit
+                    res = replay_exit(sig)
+                    real_outcome = res["outcome"]
+                    exit_spot = float(res["exit_price"])
+                    # Favorable spot move in the option's direction
+                    if option_type == "CE":
+                        spot_move = exit_spot - entry_spot
+                    else:
+                        spot_move = entry_spot - exit_spot
+                    if abs(delta) > 0:
+                        exit_p = entry_prem_f + abs(delta) * spot_move
+                    else:
+                        exit_p = current_prem if current_prem > 0 else entry_prem_f
+                    # Premium can't go below ~5% of entry (theta worst case)
+                    exit_p = max(exit_p, entry_prem_f * 0.05)
+
+                    if real_outcome == "TARGET_HIT":
+                        oc = "TARGET_HIT"; target_hits += 1
+                    elif real_outcome == "SL_HIT":
+                        oc = "SL_HIT"; sl_hits += 1
+                    else:  # TIME_EXIT / NO_DATA
+                        oc = "EXPIRED"; expired += 1
+                    resolve_signal(sig["signal_id"], oc,
+                                   float(sig.get("entry_price", 0)),
+                                   lot_size=lot, exit_prem=exit_p)
+                    _write_paper_trade(sig, oc,
+                                       float(sig.get("entry_price", 0)),
+                                       lot, exit_prem=exit_p)
+                    log.info(f"[Tracker] REPLAY {oc} {sym} {option_type} "
+                             f"spot={exit_spot:.2f} prem={exit_p:.2f} "
+                             f"mfe={res['mfe_pct']:+.2f}%")
+                except Exception as e:
+                    log.warning(f"[Tracker] Mode-A exit_replay failed {sym}: {e} — stub")
+                    exit_p = current_prem if current_prem > 0 else entry_prem_f
+                    resolve_signal(sig["signal_id"], "EXPIRED",
+                                   float(sig.get("entry_price", 0)), lot_size=lot, exit_prem=exit_p)
+                    _write_paper_trade(sig, "EXPIRED",
+                                       float(sig.get("entry_price", 0)), lot, exit_prem=exit_p)
+                    expired += 1
                 continue
 
             if current_prem <= 0:
