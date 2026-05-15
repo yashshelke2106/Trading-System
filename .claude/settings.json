@@ -1,0 +1,28 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python scan_only_v2.py*)",
+      "Bash(python signal_tracker.py*)",
+      "Bash(python backtest.py*)",
+      "Bash(python -c *)",
+      "Bash(python -m *)",
+      "Bash(streamlit run *)",
+      "Bash(pip install *)",
+      "Bash(pip show *)",
+      "Bash(git diff*)",
+      "Bash(git status*)",
+      "Bash(git log*)",
+      "Bash(git show*)",
+      "Bash(ls *)",
+      "Bash(cat logs/*)",
+      "Bash(grep * logs/*)",
+      "Bash(wc -l *)"
+    ],
+    "deny": [
+      "Bash(git push --force*)",
+      "Bash(rm -rf *)",
+      "Bash(del /f *)"
+    ]
+  },
+  "model": "claude-sonnet-4-6"
+}

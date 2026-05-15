@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(Get-ChildItem -Path C:\\\\Users\\\\yashs\\\\trading_system -Recurse -Directory -Filter __pycache__)",
+      "Bash(Remove-Item -Recurse -Force)",
+      "Bash(tasklist /FI \"IMAGENAME eq python.exe\")",
+      "Bash(tasklist /FI \"IMAGENAME eq pythonw.exe\")",
+      "Bash(powershell -Command \"Get-Item logs\\\\signals.json,logs\\\\scanner_vol_cache.json -ErrorAction SilentlyContinue | Select Name,LastWriteTime,Length\")",
+      "Bash(powershell -Command \"Get-Date\")",
+      "Bash(findstr /R /V \"^$\")",
+      "Bash(findstr /V \"yfinance\")",
+      "Bash(python scripts/backfill_journal.py --dry-run)",
+      "Bash(python scripts/backfill_journal.py --apply)",
+      "Bash(tasklist /FI \"WINDOWTITLE eq *Aladdin*\")",
+      "Bash(mkdir -p \"C:\\\\Users\\\\yashs\\\\.claude\\\\skills\\\\ema-volume-confirmation-workspace\\\\iteration-1\\\\eval-2-failed-long-diagnosis\\\\without_skill\\\\outputs\")"
+    ]
+  }
+}
