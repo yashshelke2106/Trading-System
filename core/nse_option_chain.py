@@ -127,7 +127,28 @@ def fetch_option_chain(symbol: str) -> List[Dict]:
         expiry_dates = records.get("expiryDates", [])
         nearest_expiry = expiry_dates[0] if expiry_dates else ""
 
-        # Filter to nearest expiry only
+        # Swing roll-guard: a 10-day hold on an option expiring in 3 days
+        # is a theta bonfire. If the nearest expiry is closer than the
+        # mode's min_days_to_expiry, roll to the first expiry that gives
+        # enough time value. Intraday mode keeps nearest (min=2).
+        try:
+            from core.trade_mode import get_mode
+            from datetime import datetime as _dt
+            min_days = int(get_mode().min_days_to_expiry)
+            today = _dt.now().date()
+            for exp in expiry_dates:
+                try:
+                    iso = _nse_expiry_to_iso(exp)
+                    d = _dt.fromisoformat(iso).date()
+                except Exception:
+                    continue
+                if (d - today).days >= min_days:
+                    nearest_expiry = exp
+                    break
+        except Exception:
+            pass
+
+        # Filter to selected expiry only
         nearest = [s for s in all_strikes if s.get("expiryDate") == nearest_expiry]
 
         rows: List[Dict] = []
