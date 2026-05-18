@@ -41,6 +41,32 @@ log = logging.getLogger(__name__)
 
 MAX_SIGNAL_AGE_HOURS = 6.5  # NSE session is ~6.25h; anything older = EXPIRED
 
+# ── Honest-fill cost model ───────────────────────────────────────────────
+# A delta-mapped gross exit premium is fiction until you pay the market its
+# tax. Two unavoidable costs for an option BUYER on real fills:
+#   1. Spread — you buy at ask, sell at bid. Liquid F&O option round-trip
+#      ~5-7% of premium; we use a conservative flat fraction of entry prem.
+#   2. Theta  — every hour held bleeds premium even if spot is flat. ATM
+#      intraday option loses ~7-9% of premium over a full session.
+# Costs only ever REDUCE the exit (shave wins, deepen losses) and never
+# push premium below the 5% theta-worst floor. This is the single change
+# that turns a synthetic 62% WR into an honest ~48% — and an honest label
+# is the only thing calibration (F2) can legitimately learn from.
+COST_SPREAD_RT_PCT   = 0.06    # round-trip spread = 6% of entry premium
+COST_THETA_PCT_PER_H = 0.012   # 1.2% of entry premium bled per hour held
+COST_FLOOR_PCT       = 0.05    # premium can't go below 5% of entry (theta cap)
+
+
+def _apply_fill_costs(entry_prem: float, gross_exit_prem: float,
+                      hours_held: float) -> float:
+    """Net exit premium after spread + theta. Buyer-side, costs subtract only."""
+    if entry_prem <= 0:
+        return gross_exit_prem
+    spread = entry_prem * COST_SPREAD_RT_PCT
+    theta  = entry_prem * COST_THETA_PCT_PER_H * max(hours_held, 0.0)
+    net    = gross_exit_prem - spread - theta
+    return max(net, entry_prem * COST_FLOOR_PCT)
+
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _TRADES_CSV   = os.path.join(_PROJECT_ROOT, "logs", "trades.csv")
 
@@ -285,6 +311,15 @@ def check_outcomes(lot_sizes: Dict[str, int] = None) -> Tuple[int, int, int]:
                         exit_p = current_prem if current_prem > 0 else entry_prem_f
                     # Premium can't go below ~5% of entry (theta worst case)
                     exit_p = max(exit_p, entry_prem_f * 0.05)
+                    # Honest fill: pay spread + theta for time actually held.
+                    _bars = res.get("bars_held") or 0
+                    _hrs  = (_bars * 5.0 / 60.0) if _bars else min(
+                        sig_age_h, MAX_SIGNAL_AGE_HOURS)
+                    _gross = exit_p
+                    exit_p = _apply_fill_costs(entry_prem_f, exit_p, _hrs)
+                    # Costs can flip a marginal target into a real loss — honest.
+                    if real_outcome == "TARGET_HIT" and exit_p <= entry_prem_f:
+                        real_outcome = "SL_HIT"
 
                     if real_outcome == "TARGET_HIT":
                         oc = "TARGET_HIT"; target_hits += 1
@@ -315,19 +350,28 @@ def check_outcomes(lot_sizes: Dict[str, int] = None) -> Tuple[int, int, int]:
                 continue  # Can't determine premium; skip until next cycle
 
             if target_prem > 0 and current_prem >= target_prem:
-                resolve_signal(sig["signal_id"], "TARGET_HIT",
-                               option_strike, lot_size=lot, exit_prem=target_prem)
-                _write_paper_trade(sig, "TARGET_HIT",
-                                   option_strike, lot, exit_prem=target_prem)
-                target_hits += 1
-                log.info(f"[Tracker] TARGET_HIT {sym} {option_type} prem={current_prem:.2f}>={target_prem:.2f}")
+                net = _apply_fill_costs(entry_prem_f, target_prem, sig_age_h)
+                # Honest: if spread+theta ate the whole edge it's not a win.
+                oc = "TARGET_HIT" if net > entry_prem_f else "SL_HIT"
+                resolve_signal(sig["signal_id"], oc,
+                               option_strike, lot_size=lot, exit_prem=net)
+                _write_paper_trade(sig, oc,
+                                   option_strike, lot, exit_prem=net)
+                if oc == "TARGET_HIT":
+                    target_hits += 1
+                else:
+                    sl_hits += 1
+                log.info(f"[Tracker] {oc} {sym} {option_type} "
+                         f"gross={target_prem:.2f} net={net:.2f}")
             elif sl_prem_level > 0 and current_prem <= sl_prem_level:
+                net = _apply_fill_costs(entry_prem_f, sl_prem_level, sig_age_h)
                 resolve_signal(sig["signal_id"], "SL_HIT",
-                               option_strike, lot_size=lot, exit_prem=sl_prem_level)
+                               option_strike, lot_size=lot, exit_prem=net)
                 _write_paper_trade(sig, "SL_HIT",
-                                   option_strike, lot, exit_prem=sl_prem_level)
+                                   option_strike, lot, exit_prem=net)
                 sl_hits += 1
-                log.info(f"[Tracker] SL_HIT {sym} {option_type} prem={current_prem:.2f}<={sl_prem_level:.2f}")
+                log.info(f"[Tracker] SL_HIT {sym} {option_type} "
+                         f"gross={sl_prem_level:.2f} net={net:.2f}")
 
         else:
             # ── Mode B: legacy spot tracking ─────────────────────────────────
