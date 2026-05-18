@@ -226,6 +226,7 @@ def _start_scan_loop(force: bool, top_n: int = 10) -> threading.Thread:
             from core.option_translator import get_option_rec
             from core.dashboard_data import get_option_chain
             from core.nse_option_chain import validate_fno_universe
+            from core.signal_finalize import finalize_and_select
 
             api = _DhanAPI()
             engine = TimeframeSyncEngine()
@@ -277,6 +278,30 @@ def _start_scan_loop(force: bool, top_n: int = 10) -> threading.Thread:
                             if sl_r > 3.0 or tgt_r > 3.0:
                                 rec_failures += 1
                                 continue
+
+                            # F4 IV-rank gate: skip rich-IV premium buys.
+                            try:
+                                from core.iv_rank import get_iv_rank
+                                if get_iv_rank().should_block(
+                                        s["symbol"], rec["iv_pct"]):
+                                    rec_failures += 1
+                                    continue
+                            except Exception:
+                                pass
+
+                            # G OI edge: ΔOI 4-quadrant + walls. Wall-block
+                            # drops; else adjusts the journaled score.
+                            oi = {}
+                            try:
+                                from core.oi_signal import oi_features
+                                oi = oi_features(s["symbol"], chain,
+                                                 s["direction"])
+                                if oi.get("wall_block"):
+                                    rec_failures += 1
+                                    continue
+                            except Exception:
+                                oi = {}
+
                             s.update({
                                 "option_strike": rec["strike"],
                                 "option_expiry": rec["expiry"],
@@ -288,6 +313,23 @@ def _start_scan_loop(force: bool, top_n: int = 10) -> threading.Thread:
                                 "iv_pct":        rec["iv_pct"],
                                 "prem_source":   rec["source"],
                             })
+                            if oi:
+                                s["confluence_score"] = int(
+                                    s.get("confluence_score", 0) or 0) \
+                                    + int(oi.get("score_delta", 0) or 0)
+                                s["oi_quadrant"] = oi.get("quadrant")
+                                s["pcr"]         = oi.get("pcr")
+                                s["pcr_regime"]  = oi.get("pcr_regime")
+                                op = oi.get("patterns") or []
+                                if op:
+                                    pc = s.get("patterns_combined") \
+                                        or s.get("patterns") or []
+                                    if isinstance(pc, str):
+                                        pc = [pc]
+                                    s["patterns_combined"] = list(pc) + op
+                                    s["patterns"] = s["patterns_combined"]
+                                    s["reason"] = (f'{s.get("reason","")} '
+                                                   f'| OI:{oi.get("quadrant")}')
                             enriched.append(s)
                         except Exception:
                             pass
@@ -309,12 +351,17 @@ def _start_scan_loop(force: bool, top_n: int = 10) -> threading.Thread:
                         except Exception:
                             pass
 
-                    write_signals(enriched, meta={
+                    # Single authoritative gate: calibrate OI-adjusted
+                    # score → P(win), keep only positive-expectancy,
+                    # rank best-edge-first, cap. Same path as scan_only_v2.
+                    fired = finalize_and_select(enriched)
+                    write_signals(fired, meta={
                         "elapsed_sec": round(elapsed, 2),
                         "universe_size": len(validated),
                         "source": "aladdin_scan_loop",
                     })
-                    log.info(f"[ScanLoop] {len(enriched)} signals in {elapsed:.1f}s")
+                    log.info(f"[ScanLoop] {len(enriched)} candidates → "
+                             f"{len(fired)} fired in {elapsed:.1f}s")
 
                     scan_count += 1
                     # Tracker + learner every 10 scans (~5 min)
