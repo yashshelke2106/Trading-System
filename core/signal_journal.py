@@ -146,12 +146,18 @@ def record_signal(signal: Dict) -> str:
 
 def resolve_signal(signal_id: str, outcome: str,
                    exit_price: float, exit_ts: Optional[str] = None,
-                   lot_size: int = 1, exit_prem: Optional[float] = None) -> bool:
+                   lot_size: int = 1, exit_prem: Optional[float] = None,
+                   extra: Optional[Dict] = None) -> bool:
     """
     Resolve a signal outcome. Rewrites the JSONL line in-place.
-    outcome: "TARGET_HIT" | "SL_HIT" | "EXPIRED"
+    outcome: "TARGET_HIT" | "SL_HIT" | "EXPIRED"  (the OPTION outcome — real $)
     exit_prem: option premium at exit — when provided and record has entry_prem,
                pnl_rupees is computed from premium move (option P&L), not spot move.
+    extra: optional dict merged into the row. Used to persist the CLEAN spot
+           label (spot_outcome / spot_pnl_pct / mfe_pct / mae_pct /
+           exit_reason) so the learner can train signal skill on the
+           theta/IV-denoised outcome while money logic stays on the
+           option outcome. Backward compatible — absent on old rows.
     """
     if not os.path.exists(JOURNAL_FILE):
         return False
@@ -180,6 +186,10 @@ def resolve_signal(signal_id: str, outcome: str,
                 r["exit_price"] = exit_price
                 r["exit_ts"]    = exit_ts or datetime.now().isoformat()
                 r["pnl_rupees"] = round(pnl, 2)
+                if extra:
+                    for k, v in extra.items():
+                        if v is not None:
+                            r[k] = v
                 updated = True
                 break
 

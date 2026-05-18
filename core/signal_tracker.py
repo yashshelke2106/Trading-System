@@ -327,9 +327,19 @@ def check_outcomes(lot_sizes: Dict[str, int] = None) -> Tuple[int, int, int]:
                         oc = "SL_HIT"; sl_hits += 1
                     else:  # TIME_EXIT / NO_DATA
                         oc = "EXPIRED"; expired += 1
+                    # CLEAN spot label = the raw spot-path result BEFORE the
+                    # theta/IV cost reclassification (signal-skill, denoised).
+                    _clean = {
+                        "spot_outcome": res.get("outcome"),
+                        "spot_pnl_pct": res.get("pnl_pct"),
+                        "mfe_pct":      res.get("mfe_pct"),
+                        "mae_pct":      res.get("mae_pct"),
+                        "exit_reason":  res.get("exit_reason"),
+                    }
                     resolve_signal(sig["signal_id"], oc,
                                    float(sig.get("entry_price", 0)),
-                                   lot_size=lot, exit_prem=exit_p)
+                                   lot_size=lot, exit_prem=exit_p,
+                                   extra=_clean)
                     _write_paper_trade(sig, oc,
                                        float(sig.get("entry_price", 0)),
                                        lot, exit_prem=exit_p)
@@ -387,16 +397,25 @@ def check_outcomes(lot_sizes: Dict[str, int] = None) -> Tuple[int, int, int]:
                     res = replay_exit(sig)
                     real_outcome = res["outcome"]
                     real_exit = float(res["exit_price"])
+                    # Mode B is spot tracking — outcome already IS the clean
+                    # spot label; still persist magnitude for graded learning.
+                    _clean = {
+                        "spot_outcome": res.get("outcome"),
+                        "spot_pnl_pct": res.get("pnl_pct"),
+                        "mfe_pct":      res.get("mfe_pct"),
+                        "mae_pct":      res.get("mae_pct"),
+                        "exit_reason":  res.get("exit_reason"),
+                    }
                     if real_outcome == "TARGET_HIT":
                         resolve_signal(sig["signal_id"], "TARGET_HIT", real_exit,
-                                       lot_size=lot)
+                                       lot_size=lot, extra=_clean)
                         _write_paper_trade(sig, "TARGET_HIT", real_exit, lot)
                         target_hits += 1
                         log.info(f"[Tracker] REPLAY TARGET_HIT {sym} @ {real_exit:.2f} "
                                  f"(mfe={res['mfe_pct']:+.2f}%)")
                     elif real_outcome == "SL_HIT":
                         resolve_signal(sig["signal_id"], "SL_HIT", real_exit,
-                                       lot_size=lot)
+                                       lot_size=lot, extra=_clean)
                         _write_paper_trade(sig, "SL_HIT", real_exit, lot)
                         sl_hits += 1
                         log.info(f"[Tracker] REPLAY SL_HIT {sym} @ {real_exit:.2f} "
@@ -404,7 +423,7 @@ def check_outcomes(lot_sizes: Dict[str, int] = None) -> Tuple[int, int, int]:
                     else:
                         # TIME_EXIT or NO_DATA — still EXPIRED but with real exit price
                         resolve_signal(sig["signal_id"], "EXPIRED", real_exit,
-                                       lot_size=lot)
+                                       lot_size=lot, extra=_clean)
                         _write_paper_trade(sig, "EXPIRED", real_exit, lot)
                         expired += 1
                         log.info(f"[Tracker] REPLAY TIME_EXIT {sym} @ {real_exit:.2f} "
