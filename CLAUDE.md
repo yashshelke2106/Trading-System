@@ -48,7 +48,16 @@ Each signal: `{symbol, direction, entry_price, sl_price, target_price, rr_ratio,
 `PAPER_TRADE=True` in config.py — no real orders even if live_runner.py is running.
 
 ## Dhan API Status
-Data API: inactive (DH-902 error). yfinance fallback active for all market data.
+Data API: SUBSCRIBED + auth OK (NOT DH-902 — that note was stale/wrong).
+Live diagnosis: requests reach Dhan, auth passes, per-field validation
+works (omit a field → specific "X is required"). Blocker is **DH-905**
+(Dhan rejects request param VALUES) on the documented v2 schema — a
+request-mechanics mismatch vs the official `dhanhq` SDK, not a dead API.
+Fixed: `_segment_for` now returns `IDX_I` (was wrong `NSE_IDX`).
+Remaining DH-905 must be closed on a real machine using the dhanhq SDK
+as reference (this sandbox has SSL interception + a simulated 2026
+clock that block a clean end-to-end Dhan call). yfinance fallback
+active meanwhile — adequate for SWING (daily bars).
 Ticker map edge cases: TATAMOTORS→TMCV.NS, MCDOWELL-N→UNITDSPR.NS, DEEPAKNT→DEEPAKNTR.NS
 
 ## NSE Market Hours

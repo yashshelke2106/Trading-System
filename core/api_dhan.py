@@ -545,9 +545,13 @@ class DhanAPI:
         return {"ok": True, "message": f"Active — got {len(result.get('open', []))} bars"}
 
     def _segment_for(self, symbol: str) -> str:
-        """Return correct exchangeSegment for index vs equity."""
-        if symbol.upper() in ("NIFTY", "BANKNIFTY", "NIFTYIT"):
-            return "NSE_IDX"
+        """Return correct exchangeSegment for index vs equity.
+        Dhan v2 index segment is 'IDX_I' (confirmed against the official
+        dhanhq SDK constant INDEX='IDX_I'); 'NSE_IDX' was wrong and would
+        DH-905 every index chart request."""
+        if symbol.upper() in ("NIFTY", "BANKNIFTY", "NIFTYIT", "FINNIFTY",
+                               "MIDCPNIFTY"):
+            return "IDX_I"
         return "NSE_EQ"
 
     def _instrument_for(self, symbol: str) -> str:
