@@ -84,6 +84,16 @@ def _scan(engine, api, top_n, universe=None):
                         dropped_no_chain.append(s["symbol"] + "(bad_prem)")
                         continue
 
+                # IV-rank gate: don't buy premium when this symbol's IV is
+                # in its own top quartile (vega-long buyer eats IV crush).
+                try:
+                    from core.iv_rank import get_iv_rank
+                    if get_iv_rank().should_block(s["symbol"], rec["iv_pct"]):
+                        dropped_no_chain.append(s["symbol"] + "(rich_iv)")
+                        continue
+                except Exception:
+                    pass
+
                 s.update({
                     "option_strike": rec["strike"],
                     "option_expiry": rec["expiry"],
