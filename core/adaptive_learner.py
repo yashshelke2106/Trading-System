@@ -100,6 +100,29 @@ MIN_PATTERN_TRADES    = 5     # per-pattern minimum before weight adjustment
 TREAT_EXPIRED_BY_PNL = True
 SIGNIFICANT_WIN_DELTA = 0.08  # 8pp win rate difference = significant
 
+# Engine-scoped training (Phase M). The calibrator and accuracy report
+# already isolate the current ENGINE_VERSION so a regime/logic change
+# never pollutes new stats. The learner did NOT — it trained on ALL
+# resolved rows, i.e. it kept re-teaching the swing engine the disowned
+# legacy intraday outcomes. When True, the learner trains ONLY on
+# current-engine resolved trades, consistent with everywhere else.
+# (Right after an engine bump this means ~0 training data → learner
+# correctly idles until enough NEW trades resolve, instead of drifting
+# on stale data. That is the correct, honest behaviour.)
+TRAIN_ENGINE_SCOPED = True
+
+
+def _resolved_scoped(days: int = 90) -> "list":
+    """Resolved journal rows, filtered to the current ENGINE_VERSION
+    when TRAIN_ENGINE_SCOPED — single source so maybe_update, the stat
+    helpers and the dry-run report all stay consistent with the
+    calibrator/accuracy split."""
+    from core.signal_journal import get_resolved_signals, ENGINE_VERSION
+    rows = get_resolved_signals(days=days)
+    if not TRAIN_ENGINE_SCOPED:
+        return rows
+    return [r for r in rows if r.get("engine_version") == ENGINE_VERSION]
+
 # Accelerator #1+#2 (Phase H): the per-pattern reinforcement rule learns
 # SIGNAL SKILL, which is best measured on the theta/IV-denoised SPOT
 # outcome, weighted by the MAGNITUDE of the move (a +2.8R run teaches far
@@ -178,7 +201,7 @@ class AdaptiveLearner:
         worse out-of-sample performance.
         """
         from core.signal_journal import get_resolved_signals
-        resolved = get_resolved_signals(days=90)
+        resolved = _resolved_scoped(90)
 
         def _has_complete_data(r: Dict) -> bool:
             """Only train on trades with entry/exit/SL/target/pnl populated."""
@@ -301,14 +324,14 @@ class AdaptiveLearner:
     def get_pattern_stats(self) -> Dict[str, Dict]:
         """Return per-pattern statistics for dashboard display."""
         from core.signal_journal import get_resolved_signals
-        resolved = get_resolved_signals(days=90)
+        resolved = _resolved_scoped(90)
         decided = [r for r in resolved if r.get("outcome") in ("TARGET_HIT", "SL_HIT")]
         return self._compute_pattern_stats(decided)
 
     def get_regime_stats(self) -> Dict[str, Dict]:
         """Return per-regime statistics."""
         from core.signal_journal import get_resolved_signals
-        resolved = get_resolved_signals(days=90)
+        resolved = _resolved_scoped(90)
         decided = [r for r in resolved if r.get("outcome") in ("TARGET_HIT", "SL_HIT")]
         return self._compute_regime_stats(decided)
 
@@ -1028,7 +1051,7 @@ class AdaptiveLearner:
         Returns [] gracefully if sklearn unavailable or insufficient data.
         """
         from core.signal_journal import get_resolved_signals
-        resolved = get_resolved_signals(days=90)
+        resolved = _resolved_scoped(90)
         decided = [r for r in resolved if r.get("outcome") in ("TARGET_HIT", "SL_HIT")]
         if len(decided) < MIN_TRADES_FOR_UPDATE:
             return []
