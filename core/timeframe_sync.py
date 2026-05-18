@@ -142,6 +142,56 @@ class TimeframeSyncEngine:
             return api.get_historical_data(sym, from_date=days_back)
 
     @staticmethod
+    def _resample_weekly(df: pd.DataFrame) -> pd.DataFrame:
+        """Daily → weekly OHLCV (NSE week ends Friday). For swing trend TF."""
+        if df is None or df.empty or "date" not in df.columns:
+            return pd.DataFrame()
+        try:
+            d = df.copy()
+            d["date"] = pd.to_datetime(d["date"])
+            d = d.set_index("date").sort_index()
+            agg = {"open": "first", "high": "max", "low": "min",
+                   "close": "last", "volume": "sum"}
+            use = {c: a for c, a in agg.items() if c in d.columns}
+            w = d.resample("W-FRI").agg(use).dropna(how="any").reset_index()
+            return w
+        except Exception:
+            return pd.DataFrame()
+
+    def _fetch_timeframes(self, api, sym):
+        """Return (df_exec, df_setup, df_hbias, df_trend) per the active
+        trade mode. Intraday: 5m/15m/1H/1D. Swing: 1D/1D/1D/1W. Distinct
+        sources fetched once and reused so swing doesn't triple-hit the
+        daily endpoint. Slot variable names are kept downstream."""
+        from core.trade_mode import get_mode
+        m = get_mode()
+        cache: Dict = {}
+
+        def _one(spec):
+            key = tuple(spec)
+            if key in cache:
+                return cache[key]
+            kind = spec[0]
+            if kind == "intraday":
+                df = self._fetch(api, sym, spec[1],
+                                 days_back=m.intraday_days_back)
+                df = (self._recent(df, m.recent_trim_days)
+                      if m.recent_trim_days else df)
+            elif kind == "daily":
+                df = self._fetch_daily(api, sym,
+                                       days_back=m.daily_days_back)
+            elif kind == "weekly":
+                df = self._resample_weekly(
+                    self._fetch_daily(api, sym, days_back=m.daily_days_back))
+            else:
+                df = pd.DataFrame()
+            cache[key] = df
+            return df
+
+        return (_one(m.exec_tf), _one(m.setup_tf),
+                _one(m.hbias_tf), _one(m.trend_tf))
+
+    @staticmethod
     def _today(df: pd.DataFrame) -> pd.DataFrame:
         if df is None or df.empty:
             return pd.DataFrame()
@@ -590,10 +640,9 @@ class TimeframeSyncEngine:
         _logger = _log.getLogger(__name__)
         try:
             in_chop = self._in_chop_window()
-            df5  = self._recent(self._fetch(api, sym, 5,  days_back=5))
-            df15 = self._recent(self._fetch(api, sym, 15, days_back=5))
-            df1h = self._recent(self._fetch(api, sym, 60, days_back=10))  # 1H bars
-            df1d = self._fetch_daily(api, sym, days_back=60)
+            # Timeframe quartet per active trade mode (swing = daily/weekly).
+            # Slot names kept; downstream logic unchanged.
+            df5, df15, df1h, df1d = self._fetch_timeframes(api, sym)
 
             if len(df5) < 10:
                 return None
