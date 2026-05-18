@@ -100,6 +100,57 @@ MIN_PATTERN_TRADES    = 5     # per-pattern minimum before weight adjustment
 TREAT_EXPIRED_BY_PNL = True
 SIGNIFICANT_WIN_DELTA = 0.08  # 8pp win rate difference = significant
 
+# Accelerator #1+#2 (Phase H): the per-pattern reinforcement rule learns
+# SIGNAL SKILL, which is best measured on the theta/IV-denoised SPOT
+# outcome, weighted by the MAGNITUDE of the move (a +2.8R run teaches far
+# more than a scratch +1). Money tuners (RR, expectancy, calibrator) keep
+# using the real OPTION outcome — skill and cost stay separated.
+GRADE_W_MIN = 0.25            # floor so a tiny move still counts a little
+GRADE_W_MAX = 3.0             # cap so one outlier can't dominate the update
+
+
+def _clean_won(r: Dict) -> bool:
+    """Denoised signal-skill label. Prefer the raw SPOT-path result
+    (theta/IV-independent); fall back to spot P&L sign, then to the
+    (possibly EXPIRED-relabelled) option outcome."""
+    so = r.get("spot_outcome")
+    if so == "TARGET_HIT":
+        return True
+    if so == "SL_HIT":
+        return False
+    sp = r.get("spot_pnl_pct")
+    if sp is not None:
+        try:
+            return float(sp) > 0
+        except (ValueError, TypeError):
+            pass
+    return r.get("outcome") == "TARGET_HIT"
+
+
+def _grade_weight(r: Dict) -> float:
+    """Magnitude of the move in R (|realised %| / risk %), clamped.
+    1.0 when it can't be computed → identical to old binary behaviour."""
+    try:
+        entry = float(r.get("entry_price") or 0)
+        sl = float(r.get("sl_price") or 0)
+        if entry <= 0 or sl <= 0:
+            return 1.0
+        risk_pct = abs(entry - sl) / entry * 100.0
+        if risk_pct <= 0:
+            return 1.0
+        realised = r.get("spot_pnl_pct")
+        if realised is None:
+            realised = r.get("pnl_pct")
+        if realised is None:
+            mfe = r.get("mfe_pct")
+            realised = mfe if mfe is not None else None
+        if realised is None:
+            return 1.0
+        r_mult = abs(float(realised)) / risk_pct
+        return max(GRADE_W_MIN, min(GRADE_W_MAX, r_mult))
+    except (ValueError, TypeError, ZeroDivisionError):
+        return 1.0
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -159,11 +210,15 @@ class AdaptiveLearner:
         for r in resolved:
             if r.get("outcome") not in accepted or not _has_complete_data(r):
                 continue
+            # Always work on a copy; attach the clean signal-skill label
+            # and the magnitude weight for the pattern-reinforcement rule.
+            r = {**r}
             if r.get("outcome") == "EXPIRED":
-                # Relabel by P&L so every downstream win/loss check
-                # (which keys off the outcome string) stays correct.
-                r = {**r, "outcome": "TARGET_HIT" if _pnl(r) > 0 else "SL_HIT",
-                     "_was_expired": True}
+                # Relabel by P&L so option-outcome win/loss checks stay correct.
+                r["outcome"] = "TARGET_HIT" if _pnl(r) > 0 else "SL_HIT"
+                r["_was_expired"] = True
+            r["_won_clean"] = _clean_won(r)
+            r["_grade_w"] = _grade_weight(r)
             decided.append(r)
         decided.sort(key=lambda r: r.get("ts", ""))
 
@@ -295,7 +350,8 @@ class AdaptiveLearner:
             "wins": 0, "losses": 0, "total_pnl": 0.0, "ema_win_rate": None
         })
         for sig in decided:
-            win = sig["outcome"] == "TARGET_HIT"
+            # Clean signal-skill label (theta/IV-denoised) for pattern stats.
+            win = bool(sig.get("_won_clean", sig.get("outcome") == "TARGET_HIT"))
             pnl = float(sig.get("pnl_rupees") or 0)
             for pattern in sig.get("patterns", []):
                 p = pattern.strip().lower()
@@ -669,37 +725,52 @@ class AdaptiveLearner:
             if not dir_decided:
                 continue
 
-            dir_wins = [d for d in dir_decided if d["outcome"] == "TARGET_HIT"]
+            # Clean signal-skill label; raw count still gates the guard.
+            dir_wins = [d for d in dir_decided if d.get("_won_clean",
+                        d.get("outcome") == "TARGET_HIT")]
             if len(dir_wins) < MIN_DIR_WINS:
                 # Not enough wins in this direction — leave direction's pattern weights neutral.
                 # Existing keys for this direction are left unchanged (or initialized at 1.0).
                 continue
 
-            dir_wr = len(dir_wins) / len(dir_decided)
+            # Direction baseline as a MAGNITUDE-weighted win rate (#2): a
+            # direction whose wins ran big is a higher bar than one that
+            # only scratched out wins.
+            dir_win_w = sum(d.get("_grade_w", 1.0) for d in dir_wins)
+            dir_tot_w = sum(d.get("_grade_w", 1.0) for d in dir_decided)
+            dir_wr = (dir_win_w / dir_tot_w) if dir_tot_w > 0 else 0.0
             if dir_wr <= 0:
                 continue
 
-            # Tally per-pattern outcomes WITHIN this direction only
-            pat_wins:   Dict[str, int] = defaultdict(int)
-            pat_losses: Dict[str, int] = defaultdict(int)
+            # Tally per-pattern WITHIN this direction: weighted sums drive
+            # the ratio, raw counts gate MIN_PATTERN_TRADES (so 2 big trades
+            # can't masquerade as a 5-trade sample).
+            pat_w_win:  Dict[str, float] = defaultdict(float)
+            pat_w_tot:  Dict[str, float] = defaultdict(float)
+            pat_n:      Dict[str, int]   = defaultdict(int)
+            pat_win_n:  Dict[str, int]   = defaultdict(int)
             for sig in dir_decided:
-                win = sig["outcome"] == "TARGET_HIT"
+                win = bool(sig.get("_won_clean",
+                                   sig.get("outcome") == "TARGET_HIT"))
+                gw = sig.get("_grade_w", 1.0)
                 for p in sig.get("patterns", []):
                     p = p.strip().lower()
                     if not p:
                         continue
+                    pat_n[p] += 1
+                    pat_w_tot[p] += gw
                     if win:
-                        pat_wins[p] += 1
-                    else:
-                        pat_losses[p] += 1
+                        pat_win_n[p] += 1
+                        pat_w_win[p] += gw
 
-            for pattern in set(pat_wins) | set(pat_losses):
-                wins_n = pat_wins[pattern]
-                total  = wins_n + pat_losses[pattern]
+            for pattern in set(pat_w_tot):
+                total = pat_n[pattern]
                 if total < MIN_PATTERN_TRADES:
                     continue
 
-                wr_pattern = wins_n / total
+                tot_w = pat_w_tot[pattern]
+                wins_n = pat_w_win[pattern]
+                wr_pattern = (wins_n / tot_w) if tot_w > 0 else 0.0
                 # Key is direction-qualified: "long:pattern_name" or "short:pattern_name"
                 # Prevents supertrend_down being penalized for long AND short contexts
                 # (it's bad for longs, good for shorts — two separate weights)
@@ -715,7 +786,8 @@ class AdaptiveLearner:
                         "from":   round(prev, 3),
                         "to":     new_w,
                         "reason": (f"{direction} wr={wr_pattern:.1%} vs {direction}_base={dir_wr:.1%} "
-                                   f"({wins_n}W/{total-wins_n}L) weight {arrow}"),
+                                   f"({pat_win_n[pattern]}W/{total-pat_win_n[pattern]}L "
+                                   f"grade-wtd) weight {arrow}"),
                     }
 
         with _lock:
