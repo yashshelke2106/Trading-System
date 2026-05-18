@@ -34,3 +34,8 @@ FO_UNIVERSE = [
     "ATUL", "BALKRISIND", "DEEPAKNTR", "NAVINFLUOR", "PERSISTENT",
     "PIDILITIND",
 ]
+
+# Most-liquid 100 F&O names (FO_UNIVERSE is rank-ordered largest→smallest by
+# market-cap / turnover). Tighter universe = less noise, tighter spreads,
+# cleaner option chains. Scanner uses this by default.
+TOP100_FO = FO_UNIVERSE[:100]

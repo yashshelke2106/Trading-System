@@ -19,7 +19,7 @@ import config
 from core.api_dhan import DhanAPI, check_token_health
 from core.timeframe_sync import TimeframeSyncEngine
 from core.signal_writer import write_signals, SIGNALS_FILE
-from core.universe import FO_UNIVERSE
+from core.universe import FO_UNIVERSE, TOP100_FO
 from core.signal_journal import record_signal
 from core.signal_tracker import check_outcomes
 from core.adaptive_learner import get_learner
@@ -96,6 +96,10 @@ def _scan(engine, api, top_n, universe=None):
                     "prem_source":   rec["source"],
                 })
                 enriched.append(s)
+                try:
+                    record_signal(s)
+                except Exception:
+                    pass
             else:
                 dropped_no_chain.append(s["symbol"] + "(no_rec)")
         except Exception:
@@ -104,10 +108,6 @@ def _scan(engine, api, top_n, universe=None):
     if dropped_no_chain:
         print(f'  Dropped {len(dropped_no_chain)} non-F&O/bad-chain: {", ".join(dropped_no_chain[:10])}')
     sigs = enriched
-        try:
-            record_signal(s)
-        except Exception:
-            pass
 
     # Write enriched signals (option fields now present for UI)
     write_signals(sigs, meta={"elapsed_sec": elapsed, "universe_size": len(universe)})
@@ -160,11 +160,83 @@ def _scan(engine, api, top_n, universe=None):
     return len(sigs)
 
 
+def _explain(sym: str) -> int:
+    """Trace ONE symbol through the pipeline. Captures every DEBUG/INFO
+    kill/pass line the engine emits for that symbol, then prints the
+    verdict. Read-only — no signals.json write, no journal."""
+    buf: list = []
+
+    class _Cap(_logging.Handler):
+        def emit(self, rec):
+            try:
+                msg = rec.getMessage()
+            except Exception:
+                return
+            if sym in msg:
+                buf.append(f"{rec.name.split('.')[-1]}: {msg}")
+
+    cap = _Cap()
+    cap.setLevel(_logging.DEBUG)
+    targets = [
+        "core.signal_engine", "core.agents.signal_agent",
+        "core.timeframe_sync", "core.trade_ranker", "core.order_flow",
+    ]
+    saved = {}
+    for name in targets:
+        lg = _logging.getLogger(name)
+        saved[name] = lg.level
+        lg.setLevel(_logging.DEBUG)
+        lg.addHandler(cap)
+
+    api = DhanAPI()
+    engine = TimeframeSyncEngine()
+    print(f"\n=== EXPLAIN {sym} ===")
+    try:
+        sigs = engine.scan_universe(api, [sym])
+    except Exception as e:
+        print(f"  scan error: {e}")
+        sigs = []
+    finally:
+        for name in targets:
+            lg = _logging.getLogger(name)
+            lg.removeHandler(cap)
+            lg.setLevel(saved[name])
+
+    print(f"\n  pipeline trace ({len(buf)} lines):")
+    if not buf:
+        print("    (no stage logged this symbol - likely no OHLCV data, "
+              "or killed before signal_engine. Run with --force if market shut.)")
+    for line in buf:
+        print(f"    {line}")
+
+    mine = [s for s in sigs if s.get("symbol") == sym]
+    print("\n  verdict:")
+    if mine:
+        s = mine[0]
+        print(f"    PASS -> {s['direction'].upper()} grade={s['confluence_grade']} "
+              f"score={s.get('confluence_score')} entry={s.get('entry_price')} "
+              f"sl={s.get('sl_price')} tgt={s.get('target_price')}")
+        print(f"    patterns: {s.get('patterns_combined') or s.get('reason')}")
+    else:
+        print("    KILLED - no signal. Last 'KILL:' line above = the gate that "
+              "stopped it.")
+    return 0
+
+
 def main():
     parser = argparse.ArgumentParser(description='F&O signal scanner - no execution')
     parser.add_argument('--force', action='store_true', help='Run outside market hours')
     parser.add_argument('--top',   type=int, default=10)
+    parser.add_argument('--explain', metavar='SYMBOL',
+                        help='Trace one symbol through the pipeline: show which '
+                             'stage killed or passed it, then exit.')
+    parser.add_argument('--all', action='store_true',
+                        help='Scan full 153 F&O universe (default: top 100 most '
+                             'liquid only).')
     args = parser.parse_args()
+
+    if args.explain:
+        return _explain(args.explain.upper())
 
     _signal.signal(_signal.SIGINT, _stop)
 
@@ -176,11 +248,14 @@ def main():
 
     # Validate universe against live NSE F&O list — remove non-F&O stocks
     print('Validating F&O universe against NSE...')
-    validated_universe = validate_fno_universe(FO_UNIVERSE)
-    if len(validated_universe) < len(FO_UNIVERSE):
-        removed = len(FO_UNIVERSE) - len(validated_universe)
+    base_universe = FO_UNIVERSE if args.all else TOP100_FO
+    print(f'  Universe pool: {len(base_universe)} stocks '
+          f'({"full F&O" if args.all else "top 100 liquid"})')
+    validated_universe = validate_fno_universe(base_universe)
+    if len(validated_universe) < len(base_universe):
+        removed = len(base_universe) - len(validated_universe)
         print(f'  Removed {removed} non-F&O stocks from universe')
-    universe = validated_universe if validated_universe else FO_UNIVERSE
+    universe = validated_universe if validated_universe else base_universe
 
     print(f'F&O Signal Scanner v2 -- {SCAN_INTERVAL_SEC}s interval -- SIGNAL ONLY (no orders)')
     print(f'Signals file: {SIGNALS_FILE}')
