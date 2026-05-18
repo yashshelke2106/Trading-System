@@ -41,15 +41,8 @@ _GOOD = {"trend_up", "trend_down", "breakout", "nr7_breakout",
          "inside_bar_breakout", "vwap_breakout", "ema_crossover", "ema_pullback"}
 _SEM  = threading.Semaphore(4)  # cap concurrent yfinance calls; ~3 req/s per worker
 
-# ── Selective-fire gate (the 42%→60% lever) ──────────────────────────────
-# A signal is only worth firing if its calibrated edge clears its own cost.
-# Expectancy per trade in R = p·rr − (1−p)·1. Require it to beat a margin,
-# so we trade the high-confidence tail and SKIP the flat middle — fewer
-# trades, higher *traded* hit rate. This is the only honest path to 60%+
-# for an option buyer (theta forbids it as a blanket number).
-SELECTIVE_FIRE      = True
-MIN_EXPECTANCY_R    = 0.15   # need p·rr − (1−p) ≥ this (positive w/ margin)
-SELECTIVE_FIRE_KEEP = 12     # hard cap on signals emitted per scan (sniper, not spray)
+# Calibration + selective-fire now live in core.signal_finalize (applied
+# post-OI-enrichment in scan_only_v2). scan_universe stays candidate-only.
 
 
 @dataclass
@@ -1001,37 +994,10 @@ class TimeframeSyncEngine:
                 if sig:
                     out.append(sig)
 
-        # ── Calibrate every survivor's raw score → honest P(win) ─────────
-        try:
-            from core.calibrator import get_calibrator
-            cal = get_calibrator()
-        except Exception:
-            cal = None
-        for s in out:
-            if cal is not None:
-                try:
-                    s.calibrated_prob = float(cal.predict(s.confluence_score))
-                except Exception:
-                    s.calibrated_prob = 0.0
-
-        # ── Selective fire: keep only positive-expectancy signals ────────
-        # Spray across a flat ~29% base rate loses. Firing only where
-        # p·rr − (1−p) clears a margin trades the confident tail and lifts
-        # the *traded* hit rate. Skipping is a position.
-        if SELECTIVE_FIRE and out:
-            kept = []
-            for s in out:
-                sl_d  = abs(s.entry_price - s.sl_price)
-                tgt_d = abs(s.target_price - s.entry_price)
-                rr    = (tgt_d / sl_d) if sl_d > 0 else 0.0
-                p     = s.calibrated_prob
-                exp_r = p * rr - (1.0 - p) * 1.0
-                if exp_r >= MIN_EXPECTANCY_R:
-                    s.reason = f"{s.reason} | E={exp_r:+.2f}R p={p:.0%}"
-                    kept.append((s, exp_r))
-            kept.sort(key=lambda t: t[1], reverse=True)   # best edge first
-            out = [s for s, _ in kept[:SELECTIVE_FIRE_KEEP]]
-        else:
-            out.sort(key=lambda s: ({"S": 0, "A": 1, "B": 2, "C": 3}.get(s.confluence_grade, 9),
-                                     -s.confluence_score))
+        # Generate ranked CANDIDATES only. Calibration + selective-fire is
+        # applied later by core.signal_finalize, AFTER option-leg + OI
+        # enrichment, so the gate sees the OI-adjusted score (running it
+        # here would kill candidates before the OI edge could speak).
+        out.sort(key=lambda s: ({"S": 0, "A": 1, "B": 2, "C": 3}.get(s.confluence_grade, 9),
+                                 -s.confluence_score))
         return [s.to_dict() for s in out]

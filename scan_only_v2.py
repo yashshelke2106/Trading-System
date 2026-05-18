@@ -21,6 +21,7 @@ from core.timeframe_sync import TimeframeSyncEngine
 from core.signal_writer import write_signals, SIGNALS_FILE
 from core.universe import FO_UNIVERSE, TOP100_FO
 from core.signal_journal import record_signal
+from core.signal_finalize import finalize_and_select
 from core.signal_tracker import check_outcomes
 from core.adaptive_learner import get_learner
 from core.option_translator import get_option_rec
@@ -94,6 +95,20 @@ def _scan(engine, api, top_n, universe=None):
                 except Exception:
                     pass
 
+                # OI edge: ΔOI 4-quadrant + PCR regime + OI walls. The one
+                # orthogonal (non-price) input. Wall-block drops the trade
+                # outright; otherwise it adjusts the score the calibrator
+                # learns from. Cold-start neutral, never raises.
+                oi = {}
+                try:
+                    from core.oi_signal import oi_features
+                    oi = oi_features(s["symbol"], chain, s["direction"])
+                    if oi.get("wall_block"):
+                        dropped_no_chain.append(s["symbol"] + "(oi_wall)")
+                        continue
+                except Exception:
+                    oi = {}
+
                 s.update({
                     "option_strike": rec["strike"],
                     "option_expiry": rec["expiry"],
@@ -105,6 +120,21 @@ def _scan(engine, api, top_n, universe=None):
                     "iv_pct":        rec["iv_pct"],
                     "prem_source":   rec["source"],
                 })
+                if oi:
+                    s["confluence_score"] = int(s.get("confluence_score", 0) or 0) \
+                        + int(oi.get("score_delta", 0) or 0)
+                    s["oi_quadrant"]  = oi.get("quadrant")
+                    s["pcr"]          = oi.get("pcr")
+                    s["pcr_regime"]   = oi.get("pcr_regime")
+                    op = oi.get("patterns") or []
+                    if op:
+                        pc = s.get("patterns_combined") or s.get("patterns") or []
+                        if isinstance(pc, str):
+                            pc = [pc]
+                        s["patterns_combined"] = list(pc) + op
+                        s["patterns"] = s["patterns_combined"]
+                        s["reason"] = f'{s.get("reason","")} | OI:{oi.get("quadrant")}'
+
                 enriched.append(s)
                 try:
                     record_signal(s)
@@ -117,7 +147,9 @@ def _scan(engine, api, top_n, universe=None):
 
     if dropped_no_chain:
         print(f'  Dropped {len(dropped_no_chain)} non-F&O/bad-chain: {", ".join(dropped_no_chain[:10])}')
-    sigs = enriched
+    # Single authoritative gate: calibrate OI-adjusted score → P(win),
+    # keep only positive-expectancy signals, rank best-edge-first, cap.
+    sigs = finalize_and_select(enriched)
 
     # Write enriched signals (option fields now present for UI)
     write_signals(sigs, meta={"elapsed_sec": elapsed, "universe_size": len(universe)})
