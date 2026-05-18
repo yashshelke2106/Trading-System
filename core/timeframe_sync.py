@@ -621,7 +621,14 @@ class TimeframeSyncEngine:
     @staticmethod
     def _in_chop_window() -> bool:
         """Last 30 min of NSE = squaring zone. Skip.
-        Opening 5 min (9:15-9:20) too noisy, but 9:20+ OK — opening breakouts strongest."""
+        Opening 5 min (9:15-9:20) too noisy, but 9:20+ OK — opening breakouts strongest.
+        Swing trades the daily close → no intraday chop window applies."""
+        try:
+            from core.trade_mode import get_mode as _gm
+            if _gm().bypass_intraday_time_gates:
+                return False
+        except Exception:
+            pass
         n = datetime.now()
         cur = n.hour * 60 + n.minute
         return (cur < 9*60 + 20) or (cur >= 15*60)

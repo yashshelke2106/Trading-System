@@ -1210,24 +1210,34 @@ class SignalEngine:
             current_hour = 10  # simulate best trading hour
             current_minute = 30
 
-        # Skip first N minutes (09:15-09:30 opening candle = false breakouts)
-        skip_mins = int(effective_config.get('skip_first_minutes', 15))
-        if current_hour == 9 and current_minute < (15 + skip_mins):
-            _log.debug(f"[SE] {symbol} KILL: opening noise ({current_hour}:{current_minute:02d})")
-            return None
+        # Swing trades on the daily close — intraday clock gates (skip the
+        # open, block the afternoon) are meaningless and would wrongly kill
+        # every signal generated after noon. Bypass them in swing mode.
+        try:
+            from core.trade_mode import get_mode as _gm
+            _bypass_clock = bool(_gm().bypass_intraday_time_gates)
+        except Exception:
+            _bypass_clock = False
 
-        block_after = int(effective_config.get('block_after_hour', 12))
-        if current_hour >= block_after:
-            # Top mover override: allow extreme/top movers through afternoon block
-            try:
-                if is_mover and should_bypass_afternoon_block(mover_class, current_hour):
-                    _log.info(f"[SE] {symbol} BYPASS afternoon block (top mover at {current_hour}:00)")
-                else:
+        if not _bypass_clock:
+            # Skip first N minutes (09:15-09:30 opening candle = false breakouts)
+            skip_mins = int(effective_config.get('skip_first_minutes', 15))
+            if current_hour == 9 and current_minute < (15 + skip_mins):
+                _log.debug(f"[SE] {symbol} KILL: opening noise ({current_hour}:{current_minute:02d})")
+                return None
+
+            block_after = int(effective_config.get('block_after_hour', 12))
+            if current_hour >= block_after:
+                # Top mover override: allow extreme/top movers through afternoon block
+                try:
+                    if is_mover and should_bypass_afternoon_block(mover_class, current_hour):
+                        _log.info(f"[SE] {symbol} BYPASS afternoon block (top mover at {current_hour}:00)")
+                    else:
+                        _log.debug(f"[SE] {symbol} KILL: hour={current_hour} >= {block_after}")
+                        return None
+                except Exception:
                     _log.debug(f"[SE] {symbol} KILL: hour={current_hour} >= {block_after}")
                     return None
-            except Exception:
-                _log.debug(f"[SE] {symbol} KILL: hour={current_hour} >= {block_after}")
-                return None
 
         # Volume cap: wins avg vol_ratio=0.96, losses=1.70. Excessive volume = chasing
         # Top movers HAVE high vol — bypass via effective_config override

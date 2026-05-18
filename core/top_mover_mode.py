@@ -43,7 +43,18 @@ def detect_top_mover(df_5m: pd.DataFrame, df_1d: Optional[pd.DataFrame] = None
 
     classification ∈ {'normal', 'top_gainer', 'top_loser',
                        'extreme_gainer', 'extreme_loser'}
+
+    Top-mover is an INTRADAY concept (today's % gap/move vs prior close
+    on intraday bars). In swing mode the "5m" slot carries DAILY bars, so
+    this detection would misread a multi-day daily delta as a one-day
+    move and flag every stock extreme — disable it entirely in swing.
     """
+    try:
+        from core.trade_mode import get_mode
+        if get_mode().bypass_intraday_time_gates:   # swing
+            return False, 'normal', 0.0, 0.0
+    except Exception:
+        pass
     if df_5m is None or df_5m.empty or len(df_5m) < 2:
         return False, 'normal', 0.0, 0.0
 
