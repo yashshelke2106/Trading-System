@@ -20,8 +20,18 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from core.signal_journal import JOURNAL_FILE, ENGINE_VERSION  # noqa: E402
 
 
-def _classify(reason: str) -> str:
-    r = (reason or "").lower()
+def _classify(row: dict) -> str:
+    """Outcome-first. resolve_signal() writes `outcome`, not `exit_reason`
+    — keying off exit_reason (the old bug) reported every closed trade as
+    OPEN. Fall back to exit_reason text only when outcome is absent."""
+    oc = (row.get("outcome") or "").upper()
+    if oc == "TARGET_HIT":
+        return "TARGET"
+    if oc == "SL_HIT":
+        return "SL"
+    if oc in ("EXPIRED", "TIME_EXIT"):
+        return "TIME"
+    r = (row.get("exit_reason") or "").lower()
     if "target" in r:
         return "TARGET"
     if "sl" in r:
@@ -32,13 +42,13 @@ def _classify(reason: str) -> str:
 
 
 def _stats(rows: list, label: str) -> None:
-    closed = [r for r in rows if _classify(r.get("exit_reason")) != "OPEN"]
+    closed = [r for r in rows if _classify(r) != "OPEN"]
     if not closed:
         print(f"\n=== {label} ===\n  no closed trades yet "
               f"({len(rows)} signals, awaiting outcomes)")
         return
 
-    c = Counter(_classify(r.get("exit_reason")) for r in closed)
+    c = Counter(_classify(r) for r in closed)
     t, s, tm = c.get("TARGET", 0), c.get("SL", 0), c.get("TIME", 0)
     n = len(closed)
     pn = [r.get("pnl_pct", r.get("pnl_percent"))
