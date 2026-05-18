@@ -280,6 +280,8 @@ def main():
     parser.add_argument('--all', action='store_true',
                         help='Scan full 153 F&O universe (default: top 100 most '
                              'liquid only).')
+    parser.add_argument('--no-eod', action='store_true',
+                        help='Skip the post-market EOD learning batch on close.')
     args = parser.parse_args()
 
     if args.explain:
@@ -322,7 +324,15 @@ def main():
                         break
                     time.sleep(1)
             else:
-                print('Market closed. Exiting.')
+                print('Market closed.')
+                if not args.no_eod:
+                    try:
+                        print('Running post-market EOD learning batch...')
+                        from core.eod_learn import run_eod
+                        run_eod()
+                    except Exception as e:
+                        print(f'  EOD batch error (non-fatal): {e}')
+                print('Exiting.')
                 break
             continue
 
