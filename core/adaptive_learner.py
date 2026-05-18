@@ -91,6 +91,13 @@ TUNABLE_PARAMS: Dict[str, Tuple[float, float, float, float, str]] = {
 ALPHA = 0.15
 MIN_TRADES_FOR_UPDATE = 20    # need this many resolved trades
 MIN_PATTERN_TRADES    = 5     # per-pattern minimum before weight adjustment
+
+# Option-buyer reality: a time-out (EXPIRED) is NOT neutral — premium decayed
+# to theta, so it's effectively a loss (or a small win if it timed out still
+# in profit). When True, EXPIRED rows enter the per-pattern/vote/RR learning
+# set, relabelled by realised P&L sign: pnl > 0 → win, pnl <= 0 → loss.
+# When False, legacy behaviour (EXPIRED ignored except aggregate expiry-rate).
+TREAT_EXPIRED_BY_PNL = True
 SIGNIFICANT_WIN_DELTA = 0.08  # 8pp win rate difference = significant
 
 
@@ -129,15 +136,36 @@ class AdaptiveLearner:
                         float(r.get("exit_price") or 0) > 0 and
                         float(r.get("sl_price") or 0) > 0 and
                         float(r.get("target_price") or 0) > 0 and
-                        r.get("pnl_pct") is not None)
+                        (r.get("pnl_pct") is not None
+                         or r.get("pnl_percent") is not None
+                         or r.get("pnl_rupees") is not None))
             except (ValueError, TypeError):
                 return False
 
-        decided = sorted(
-            [r for r in resolved
-             if r.get("outcome") in ("TARGET_HIT", "SL_HIT") and _has_complete_data(r)],
-            key=lambda r: r.get("ts", ""),
-        )
+        def _pnl(r: Dict) -> float:
+            """Realised P&L sign source. Prefer pct, fall back to rupees."""
+            for k in ("pnl_pct", "pnl_percent", "pnl_rupees"):
+                v = r.get(k)
+                if v is not None:
+                    try:
+                        return float(v)
+                    except (ValueError, TypeError):
+                        pass
+            return 0.0
+
+        accepted = ("TARGET_HIT", "SL_HIT", "EXPIRED") if TREAT_EXPIRED_BY_PNL \
+            else ("TARGET_HIT", "SL_HIT")
+        decided = []
+        for r in resolved:
+            if r.get("outcome") not in accepted or not _has_complete_data(r):
+                continue
+            if r.get("outcome") == "EXPIRED":
+                # Relabel by P&L so every downstream win/loss check
+                # (which keys off the outcome string) stays correct.
+                r = {**r, "outcome": "TARGET_HIT" if _pnl(r) > 0 else "SL_HIT",
+                     "_was_expired": True}
+            decided.append(r)
+        decided.sort(key=lambda r: r.get("ts", ""))
 
         if not force and len(decided) < MIN_TRADES_FOR_UPDATE:
             return {}
