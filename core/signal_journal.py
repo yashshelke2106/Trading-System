@@ -51,7 +51,7 @@ JOURNAL_FILE = os.path.join(_PROJECT_ROOT, "logs", "signal_journal.jsonl")
 # Engine version stamp — bump on any signal-logic change so accuracy can be
 # measured per-engine and old (broken) signals never pollute new stats.
 # Entries without this field = legacy pre-Phase-A..D engine.
-ENGINE_VERSION = "v2-phaseABCD-2026.05.15"
+ENGINE_VERSION = "v3-swing-2026.05.18"
 
 _lock = threading.Lock()
 _seq_counters: Dict[str, int] = {}
