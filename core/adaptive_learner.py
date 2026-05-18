@@ -146,6 +146,31 @@ GRADE_W_MAX = 3.0             # cap so one outlier can't dominate the update
 # RR) are NOT shrinkage-protected → they stay hard-gated on real n.
 CONF_K = 12
 
+# Significance gate (Phase O). Shrinkage sizes the move; this decides
+# whether a move is allowed AT ALL. A pattern's weight only changes if
+# its win rate is STATISTICALLY different from its direction baseline —
+# the Wilson score interval on the pattern's RAW win count must exclude
+# the baseline. Small/noisy samples → wide interval → straddles baseline
+# → NO change. This is the rigorous fix for the multiple-comparisons
+# risk (dozens of weights vs one thin sample) and substitutes for the
+# small-n holdout the force path lacks. z=1.64 ≈ 90% confidence: strict
+# enough to reject noise, permissive enough to still learn on real data.
+SIG_Z = 1.64
+
+
+def _wilson_bounds(wins: int, n: int, z: float = SIG_Z):
+    """Wilson score interval (lo, hi) for a binomial proportion.
+    Robust at small n (unlike normal approx). n<=0 → full (0,1)."""
+    if n <= 0:
+        return 0.0, 1.0
+    from math import sqrt
+    p = wins / n
+    z2 = z * z
+    denom = 1.0 + z2 / n
+    centre = (p + z2 / (2 * n)) / denom
+    half = (z / denom) * sqrt(p * (1 - p) / n + z2 / (4 * n * n))
+    return max(0.0, centre - half), min(1.0, centre + half)
+
 
 def _clean_won(r: Dict) -> bool:
     """Denoised signal-skill label. Prefer the raw SPOT-path result
@@ -783,6 +808,9 @@ class AdaptiveLearner:
             dir_win_w = sum(d.get("_grade_w", 1.0) for d in dir_wins)
             dir_tot_w = sum(d.get("_grade_w", 1.0) for d in dir_decided)
             dir_wr = (dir_win_w / dir_tot_w) if dir_tot_w > 0 else 0.0
+            # RAW direction win fraction = the baseline the significance
+            # test compares each pattern against (counts, not weighted).
+            base_p0 = len(dir_wins) / len(dir_decided)
             if dir_wr <= 0:
                 continue
 
@@ -812,6 +840,17 @@ class AdaptiveLearner:
                 if total < 1:
                     continue
 
+                # ── Significance gate ───────────────────────────────────
+                # Move the weight ONLY if the pattern's RAW win rate is
+                # statistically distinguishable from the direction
+                # baseline. Wilson interval straddling base_p0 = not
+                # significant = noise = leave the weight alone. This is
+                # what stops dozens of weights drifting on a thin sample
+                # and is the small-n substitute for the missing holdout.
+                w_lo, w_hi = _wilson_bounds(pat_win_n[pattern], total)
+                if w_lo <= base_p0 <= w_hi:
+                    continue   # not significant vs baseline — skip
+
                 tot_w = pat_w_tot[pattern]
                 wins_n = pat_w_win[pattern]
                 wr_pattern = (wins_n / tot_w) if tot_w > 0 else 0.0
@@ -840,6 +879,7 @@ class AdaptiveLearner:
                                    f"base={dir_wr:.0%} "
                                    f"({pat_win_n[pattern]}W/"
                                    f"{total-pat_win_n[pattern]}L, n={total}, "
+                                   f"sig[{w_lo:.0%}-{w_hi:.0%}]vs{base_p0:.0%}, "
                                    f"conf={shrink:.0%}) {arrow}"),
                     }
 
