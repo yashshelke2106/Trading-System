@@ -119,6 +119,11 @@ def _scan(engine, api, top_n, universe=None):
                     "delta":         rec["delta"],
                     "iv_pct":        rec["iv_pct"],
                     "prem_source":   rec["source"],
+                    # REAL fill data (replaces flat cost-model guesses)
+                    "spread_pct":    rec.get("spread_pct"),
+                    "bid":           rec.get("bid"),
+                    "ask":           rec.get("ask"),
+                    "theta":         rec.get("theta"),
                 })
                 if oi:
                     s["confluence_score"] = int(s.get("confluence_score", 0) or 0) \

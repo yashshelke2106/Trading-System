@@ -312,6 +312,10 @@ def _start_scan_loop(force: bool, top_n: int = 10) -> threading.Thread:
                                 "delta":         rec["delta"],
                                 "iv_pct":        rec["iv_pct"],
                                 "prem_source":   rec["source"],
+                                "spread_pct":    rec.get("spread_pct"),
+                                "bid":           rec.get("bid"),
+                                "ask":           rec.get("ask"),
+                                "theta":         rec.get("theta"),
                             })
                             if oi:
                                 s["confluence_score"] = int(

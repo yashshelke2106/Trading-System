@@ -129,6 +129,13 @@ def record_signal(signal: Dict) -> str:
         "delta":         _opt_float(signal.get("delta")),
         "iv_pct":        _opt_float(signal.get("iv_pct")),
         "prem_source":   signal.get("prem_source", None),
+        # real fill data — actual bid/ask spread + BSM theta at signal time
+        # so the cost model uses the fill the market would really give,
+        # not a flat 6%/1.2%h guess (makes resolved WR trustworthy)
+        "spread_pct":    _opt_float(signal.get("spread_pct")),
+        "bid":           _opt_float(signal.get("bid")),
+        "ask":           _opt_float(signal.get("ask")),
+        "theta":         _opt_float(signal.get("theta")),
         # resolution fields
         "outcome":      None,
         "exit_price":   None,

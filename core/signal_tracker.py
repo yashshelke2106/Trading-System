@@ -58,18 +58,49 @@ except Exception:
 # push premium below the 5% theta-worst floor. This is the single change
 # that turns a synthetic 62% WR into an honest ~48% — and an honest label
 # is the only thing calibration (F2) can legitimately learn from.
+# Flat fallbacks — used ONLY when the signal carries no real chain data.
 COST_SPREAD_RT_PCT   = 0.06    # round-trip spread = 6% of entry premium
 COST_THETA_PCT_PER_H = 0.012   # 1.2% of entry premium bled per hour held
 COST_FLOOR_PCT       = 0.05    # premium can't go below 5% of entry (theta cap)
 
 
+def _real_costs(sig: Dict) -> tuple:
+    """Per-signal REAL costs from chain data captured at signal time:
+      • spread_rt   = (ask-bid)/mid  — the actual round-trip spread paid
+      • theta_per_h = |BSM theta/day| / entry_prem / 24  — actual decay
+    Returns (spread_rt|None, theta_per_h|None); None ⇒ use flat fallback.
+    This is the difference between a *modeled* fill and the fill the
+    market would actually have given — it makes every WR trustworthy."""
+    srt = None
+    tph = None
+    try:
+        sp = sig.get("spread_pct")
+        if sp is not None and float(sp) > 0:
+            srt = float(sp)
+    except (TypeError, ValueError):
+        pass
+    try:
+        th = sig.get("theta")
+        ep = sig.get("entry_prem")
+        if th is not None and ep and float(ep) > 0:
+            tph = abs(float(th)) / float(ep) / 24.0
+    except (TypeError, ValueError):
+        pass
+    return srt, tph
+
+
 def _apply_fill_costs(entry_prem: float, gross_exit_prem: float,
-                      hours_held: float) -> float:
-    """Net exit premium after spread + theta. Buyer-side, costs subtract only."""
+                      hours_held: float, spread_rt: float = None,
+                      theta_per_h: float = None) -> float:
+    """Net exit premium after spread + theta. Buyer-side, costs subtract
+    only. Uses the REAL per-signal spread/theta when provided; the flat
+    constants are a conservative fallback for signals with no chain data."""
     if entry_prem <= 0:
         return gross_exit_prem
-    spread = entry_prem * COST_SPREAD_RT_PCT
-    theta  = entry_prem * COST_THETA_PCT_PER_H * max(hours_held, 0.0)
+    srt = spread_rt if (spread_rt is not None and spread_rt > 0) else COST_SPREAD_RT_PCT
+    tph = theta_per_h if (theta_per_h is not None and theta_per_h > 0) else COST_THETA_PCT_PER_H
+    spread = entry_prem * srt
+    theta  = entry_prem * tph * max(hours_held, 0.0)
     net    = gross_exit_prem - spread - theta
     return max(net, entry_prem * COST_FLOOR_PCT)
 
@@ -319,10 +350,20 @@ def check_outcomes(lot_sizes: Dict[str, int] = None) -> Tuple[int, int, int]:
                     exit_p = max(exit_p, entry_prem_f * 0.05)
                     # Honest fill: pay spread + theta for time actually held.
                     _bars = res.get("bars_held") or 0
-                    _hrs  = (_bars * 5.0 / 60.0) if _bars else min(
-                        sig_age_h, MAX_SIGNAL_AGE_HOURS)
+                    # Held-hours must match the replay BAR size: swing walks
+                    # daily bars (calendar-day theta), intraday walks 5m.
+                    try:
+                        _bar = _get_mode().replay_bar
+                    except Exception:
+                        _bar = "5m"
+                    if _bars:
+                        _hrs = _bars * 24.0 if _bar == "1d" else _bars * 5.0 / 60.0
+                    else:
+                        _hrs = min(sig_age_h, MAX_SIGNAL_AGE_HOURS)
                     _gross = exit_p
-                    exit_p = _apply_fill_costs(entry_prem_f, exit_p, _hrs)
+                    _srt, _tph = _real_costs(sig)
+                    exit_p = _apply_fill_costs(entry_prem_f, exit_p, _hrs,
+                                               spread_rt=_srt, theta_per_h=_tph)
                     # Costs can flip a marginal target into a real loss — honest.
                     if real_outcome == "TARGET_HIT" and exit_p <= entry_prem_f:
                         real_outcome = "SL_HIT"
@@ -365,8 +406,10 @@ def check_outcomes(lot_sizes: Dict[str, int] = None) -> Tuple[int, int, int]:
             if current_prem <= 0:
                 continue  # Can't determine premium; skip until next cycle
 
+            _srt, _tph = _real_costs(sig)
             if target_prem > 0 and current_prem >= target_prem:
-                net = _apply_fill_costs(entry_prem_f, target_prem, sig_age_h)
+                net = _apply_fill_costs(entry_prem_f, target_prem, sig_age_h,
+                                        spread_rt=_srt, theta_per_h=_tph)
                 # Honest: if spread+theta ate the whole edge it's not a win.
                 oc = "TARGET_HIT" if net > entry_prem_f else "SL_HIT"
                 resolve_signal(sig["signal_id"], oc,
@@ -380,7 +423,8 @@ def check_outcomes(lot_sizes: Dict[str, int] = None) -> Tuple[int, int, int]:
                 log.info(f"[Tracker] {oc} {sym} {option_type} "
                          f"gross={target_prem:.2f} net={net:.2f}")
             elif sl_prem_level > 0 and current_prem <= sl_prem_level:
-                net = _apply_fill_costs(entry_prem_f, sl_prem_level, sig_age_h)
+                net = _apply_fill_costs(entry_prem_f, sl_prem_level, sig_age_h,
+                                        spread_rt=_srt, theta_per_h=_tph)
                 resolve_signal(sig["signal_id"], "SL_HIT",
                                option_strike, lot_size=lot, exit_prem=net)
                 _write_paper_trade(sig, "SL_HIT",
