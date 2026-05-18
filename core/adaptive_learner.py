@@ -131,6 +131,21 @@ def _resolved_scoped(days: int = 90) -> "list":
 GRADE_W_MIN = 0.25            # floor so a tiny move still counts a little
 GRADE_W_MAX = 3.0             # cap so one outlier can't dominate the update
 
+# Confidence shrinkage (Phase N). The old design was binary: a pattern
+# learned NOTHING below MIN_PATTERN_TRADES, then jumped at fixed ALPHA —
+# so "Force learn" did nothing on thin data, and when it did fire it
+# overfit (5 trades moved the weight as hard as 50). Instead, scale the
+# step by evidence: shrink = n / (n + CONF_K).
+#   n=0  → 0.00  (nothing learned from nothing — honest)
+#   n=3  → 0.20  (gentle nudge — safe to force)
+#   n=12 → 0.50  (half strength)
+#   n=40 → 0.77  (near full) ; n→∞ → 1.0 (== old behaviour)
+# This makes per-pattern learning CONTINUOUS and self-limiting: forcing
+# it on little data does a little; the math is the overfitting guard,
+# replacing the crude on/off gate. Coarse structural knobs (votes/RSI/
+# RR) are NOT shrinkage-protected → they stay hard-gated on real n.
+CONF_K = 12
+
 
 def _clean_won(r: Dict) -> bool:
     """Denoised signal-skill label. Prefer the raw SPOT-path result
@@ -265,7 +280,8 @@ class AdaptiveLearner:
         regime_stats  = self._compute_regime_stats(train)
         # Save snapshot, apply changes, simulate, optionally revert
         snapshot = {k: dict(v) for k, v in self._params.items()}
-        changes  = self._optimize_params(train, train, pattern_stats, regime_stats)
+        changes  = self._optimize_params(train, train, pattern_stats,
+                                         regime_stats, force=force)
 
         if not changes:
             return {}
@@ -440,49 +456,53 @@ class AdaptiveLearner:
     # ── Parameter optimization ────────────────────────────────────────────────
 
     def _optimize_params(self, decided: List[Dict], resolved: List[Dict],
-                          pattern_stats: Dict, regime_stats: Dict) -> Dict:
+                          pattern_stats: Dict, regime_stats: Dict,
+                          force: bool = False) -> Dict:
         changes = {}
         n = len(decided)
-        if n < MIN_TRADES_FOR_UPDATE:
-            return changes
+        if n == 0:
+            return changes   # nothing to learn from nothing — always honest
 
         overall_wr = sum(1 for d in decided if d["outcome"] == "TARGET_HIT") / n
         wins   = [d for d in decided if d["outcome"] == "TARGET_HIT"]
         losses = [d for d in decided if d["outcome"] == "SL_HIT"]
 
-        # ── Rule 1: min_votes ────────────────────────────────────────────────────
-        changes.update(self._tune_vote_threshold(decided, overall_wr))
+        # Coarse structural knobs (min_votes / RSI floors / RR / strength /
+        # scoring component weights) are NOT shrinkage-protected — a single
+        # trade could swing min_votes. They stay HARD-GATED on a real
+        # sample even under force. Only the per-pattern rule (Rule 7),
+        # which is confidence-shrunk and self-limiting, runs continuously.
+        coarse = n >= MIN_TRADES_FOR_UPDATE
 
-        # ── Rule 2: RSI thresholds ───────────────────────────────────────────────
-        changes.update(self._tune_rsi_thresholds(decided))
+        if coarse:
+            # ── Rule 1: min_votes ───────────────────────────────────────────
+            changes.update(self._tune_vote_threshold(decided, overall_wr))
+            # ── Rule 2: RSI thresholds ──────────────────────────────────────
+            changes.update(self._tune_rsi_thresholds(decided))
+            # ── Rule 3: vol_surge_threshold ─────────────────────────────────
+            changes.update(self._tune_vol_threshold(decided))
+            # ── Rule 4: min_strength ────────────────────────────────────────
+            changes.update(self._tune_min_strength(decided))
+            # ── Rule 5: scoring component weights ────────────────────────────
+            changes.update(self._tune_scoring_weights(decided))
+            # ── Rule 6: EXPIRED rate ────────────────────────────────────────
+            changes.update(self._tune_expiry_rate(resolved))
 
-        # ── Rule 3: vol_surge_threshold ──────────────────────────────────────────
-        changes.update(self._tune_vol_threshold(decided))
-
-        # ── Rule 4: min_strength ─────────────────────────────────────────────────
-        changes.update(self._tune_min_strength(decided))
-
-        # ── Rule 5: scoring component weights (timeframe-level) ─────────────────
-        changes.update(self._tune_scoring_weights(decided))
-
-        # ── Rule 6: EXPIRED rate ─────────────────────────────────────────────────
-        changes.update(self._tune_expiry_rate(resolved))
-
-        # ── Rule 7: per-pattern reinforcement — THE CORE RULE ───────────────────
-        # Increase weight of patterns in TARGET_HIT, decrease in SL_HIT
+        # ── Rule 7: per-pattern reinforcement — THE CORE RULE ───────────────
+        # Increase the weight of indicators/patterns that appear in winners,
+        # decrease those in losers. Confidence-shrunk so it is SAFE to run
+        # continuously and to force on thin data (small n → small move).
         changes.update(self._tune_pattern_weights(decided, overall_wr))
 
-        # ── Rule 8: feature threshold calibration from win/loss distributions ────
-        changes.update(self._tune_feature_thresholds(wins, losses, overall_wr))
-
-        # ── Rule 9: RSI momentum zone floor for longs ────────────────────────────
-        changes.update(self._tune_rsi_momentum_zone(wins, losses))
-
-        # ── Rule 10: SHORT RSI floor — block shorts entering oversold ───────────
-        changes.update(self._tune_short_rsi_floor(wins, losses))
-
-        # ── Rule 11: Adaptive RR — reduce when SL hits >> target hits ───────────
-        changes.update(self._tune_rr_ratio(wins, losses))
+        if coarse:
+            # ── Rule 8: feature threshold calibration ───────────────────────
+            changes.update(self._tune_feature_thresholds(wins, losses, overall_wr))
+            # ── Rule 9: RSI momentum zone floor for longs ───────────────────
+            changes.update(self._tune_rsi_momentum_zone(wins, losses))
+            # ── Rule 10: SHORT RSI floor ────────────────────────────────────
+            changes.update(self._tune_short_rsi_floor(wins, losses))
+            # ── Rule 11: Adaptive RR ────────────────────────────────────────
+            changes.update(self._tune_rr_ratio(wins, losses))
 
         return changes
 
@@ -737,7 +757,8 @@ class AdaptiveLearner:
           < 1.0 → pattern predicts losses relative to its direction baseline → dampen
         Bounds: [0.5, 2.0] — more conservative than before to prevent full suppression.
         """
-        MIN_DIR_WINS = 2   # was 3 — relaxed so short patterns can train sooner
+        MIN_DIR_WINS = 1   # ≥1 win to define a usable direction baseline;
+                           # confidence shrinkage handles the small-sample risk
 
         section = "PATTERN_WEIGHTS"
         current = dict(self._params.get(section, {}))
@@ -788,7 +809,7 @@ class AdaptiveLearner:
 
             for pattern in set(pat_w_tot):
                 total = pat_n[pattern]
-                if total < MIN_PATTERN_TRADES:
+                if total < 1:
                     continue
 
                 tot_w = pat_w_tot[pattern]
@@ -800,17 +821,26 @@ class AdaptiveLearner:
                 key = f"{direction}:{pattern}"
                 prev  = current.get(key, 1.0)
                 ratio = wr_pattern / dir_wr
-                new_w = round(max(0.5, min(2.0, ALPHA * ratio + (1 - ALPHA) * prev)), 4)
+                # Confidence shrinkage: step ∝ evidence. n=0→0 move,
+                # n=3→~20%, n=12→~50%, n→∞→full ALPHA (== old behaviour).
+                # Forcing on thin data is now SAFE: small n ⇒ small move,
+                # not a no-op and not an overfit.
+                shrink    = total / (total + CONF_K)
+                eff_alpha = ALPHA * shrink
+                new_w = round(max(0.5, min(
+                    2.0, eff_alpha * ratio + (1 - eff_alpha) * prev)), 4)
 
-                if abs(new_w - prev) >= 0.01:
+                if abs(new_w - prev) >= 0.005:
                     current[key] = new_w
                     arrow = "+" if new_w > prev else "-"
                     changes[f"pw:{key}"] = {
                         "from":   round(prev, 3),
                         "to":     new_w,
-                        "reason": (f"{direction} wr={wr_pattern:.1%} vs {direction}_base={dir_wr:.1%} "
-                                   f"({pat_win_n[pattern]}W/{total-pat_win_n[pattern]}L "
-                                   f"grade-wtd) weight {arrow}"),
+                        "reason": (f"{direction} wr={wr_pattern:.0%} vs "
+                                   f"base={dir_wr:.0%} "
+                                   f"({pat_win_n[pattern]}W/"
+                                   f"{total-pat_win_n[pattern]}L, n={total}, "
+                                   f"conf={shrink:.0%}) {arrow}"),
                     }
 
         with _lock:
