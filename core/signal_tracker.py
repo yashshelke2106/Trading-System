@@ -39,7 +39,13 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 log = logging.getLogger(__name__)
 
-MAX_SIGNAL_AGE_HOURS = 6.5  # NSE session is ~6.25h; anything older = EXPIRED
+# Hold horizon from the active trade mode: intraday 6.5h (one session),
+# swing 10 calendar days. A signal older than this resolves as EXPIRED.
+try:
+    from core.trade_mode import get_mode as _get_mode
+    MAX_SIGNAL_AGE_HOURS = float(_get_mode().hold_horizon_hours)
+except Exception:
+    MAX_SIGNAL_AGE_HOURS = 6.5
 
 # ── Honest-fill cost model ───────────────────────────────────────────────
 # A delta-mapped gross exit premium is fiction until you pay the market its

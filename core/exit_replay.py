@@ -33,16 +33,54 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 log = logging.getLogger(__name__)
 
-# Cap walk-forward at NSE session length
-MAX_WINDOW_HOURS = 6.5
+# Walk-forward window from the active trade mode (intraday 6.5h /
+# swing ~10 days). Recomputed per call in replay_exit so a mode flip
+# takes effect without reimport.
+try:
+    from core.trade_mode import get_mode as _get_mode
+    MAX_WINDOW_HOURS = float(_get_mode().replay_window_hours)
+except Exception:
+    MAX_WINDOW_HOURS = 6.5
+
+
+def _fetch_bars_daily(symbol: str, start_ts: datetime, end_ts: datetime
+                      ) -> Optional[pd.DataFrame]:
+    """Fetch DAILY bars for the swing walk-forward window (yfinance)."""
+    try:
+        import yfinance as yf
+        from core.api_dhan import _YF_TICKER_MAP
+        yf_sym = _YF_TICKER_MAP.get(symbol.upper(), f"{symbol}.NS")
+        df = yf.Ticker(yf_sym).history(
+            start=(start_ts - timedelta(days=2)).strftime('%Y-%m-%d'),
+            end=(end_ts + timedelta(days=2)).strftime('%Y-%m-%d'),
+            interval='1d', auto_adjust=True,
+        )
+        if df is None or df.empty:
+            return None
+        df = df.rename(columns={c: c.lower() for c in df.columns})
+        df = df.reset_index().rename(columns={'Date': 'date', 'index': 'date'})
+        df['date'] = pd.to_datetime(df['date']).dt.tz_localize(None)
+        mask = (df['date'] >= start_ts - timedelta(days=2)) & \
+               (df['date'] <= end_ts + timedelta(days=2))
+        sub = df[mask]
+        return sub.reset_index(drop=True) if len(sub) >= 1 else None
+    except Exception as e:
+        log.debug(f"[ExitReplay] daily fetch failed for {symbol}: {e}")
+        return None
 
 
 def _fetch_bars(symbol: str, start_ts: datetime, end_ts: datetime
                 ) -> Optional[pd.DataFrame]:
-    """Fetch 5m bars between start_ts and end_ts. Returns DataFrame or None.
+    """Fetch bars between start_ts and end_ts. 5m for intraday mode,
+    daily for swing mode (walking 5m over a 10-day swing is noise).
 
     Tries Dhan first (if configured) then yfinance fallback.
     """
+    try:
+        if _get_mode().replay_bar == "1d":
+            return _fetch_bars_daily(symbol, start_ts, end_ts)
+    except Exception:
+        pass
     # Pad start by 5min to ensure we get the entry bar
     start_pad = start_ts - timedelta(minutes=5)
     end_pad = end_ts + timedelta(minutes=5)
@@ -124,7 +162,12 @@ def replay_exit(signal: Dict) -> Dict:
     except Exception:
         return default
 
-    end_ts = min(start_ts + timedelta(hours=MAX_WINDOW_HOURS), datetime.now())
+    # Window from active mode, read fresh (mode flip takes effect now).
+    try:
+        _win_h = float(_get_mode().replay_window_hours)
+    except Exception:
+        _win_h = MAX_WINDOW_HOURS
+    end_ts = min(start_ts + timedelta(hours=_win_h), datetime.now())
     if end_ts <= start_ts:
         return default
 
