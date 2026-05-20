@@ -407,13 +407,35 @@ def check_outcomes(lot_sizes: Dict[str, int] = None) -> Tuple[int, int, int]:
                 continue  # Can't determine premium; skip until next cycle
 
             _srt, _tph = _real_costs(sig)
+
+            # Compute spot-path outcome for clean learner labels.
+            # spot_outcome is the theta/IV-denoised signal-skill label.
+            current_spot = prices.get(sym, 0)
+            _spot_extra = {}
+            if current_spot > 0 and entry_spot > 0:
+                _sl_spot = float(sig.get("sl_price", 0) or 0)
+                _tgt_spot = float(sig.get("target_price", 0) or 0)
+                if direction == "long":
+                    _spot_pnl = (current_spot - entry_spot) / entry_spot * 100
+                    _s_oc = ("TARGET_HIT" if current_spot >= _tgt_spot
+                             else "SL_HIT" if current_spot <= _sl_spot
+                             else "TIME_EXIT")
+                else:
+                    _spot_pnl = (entry_spot - current_spot) / entry_spot * 100
+                    _s_oc = ("TARGET_HIT" if current_spot <= _tgt_spot
+                             else "SL_HIT" if current_spot >= _sl_spot
+                             else "TIME_EXIT")
+                _spot_extra = {"spot_outcome": _s_oc,
+                               "spot_pnl_pct": round(_spot_pnl, 2)}
+
             if target_prem > 0 and current_prem >= target_prem:
                 net = _apply_fill_costs(entry_prem_f, target_prem, sig_age_h,
                                         spread_rt=_srt, theta_per_h=_tph)
                 # Honest: if spread+theta ate the whole edge it's not a win.
                 oc = "TARGET_HIT" if net > entry_prem_f else "SL_HIT"
                 resolve_signal(sig["signal_id"], oc,
-                               option_strike, lot_size=lot, exit_prem=net)
+                               option_strike, lot_size=lot, exit_prem=net,
+                               extra=_spot_extra)
                 _write_paper_trade(sig, oc,
                                    option_strike, lot, exit_prem=net)
                 if oc == "TARGET_HIT":
@@ -426,7 +448,8 @@ def check_outcomes(lot_sizes: Dict[str, int] = None) -> Tuple[int, int, int]:
                 net = _apply_fill_costs(entry_prem_f, sl_prem_level, sig_age_h,
                                         spread_rt=_srt, theta_per_h=_tph)
                 resolve_signal(sig["signal_id"], "SL_HIT",
-                               option_strike, lot_size=lot, exit_prem=net)
+                               option_strike, lot_size=lot, exit_prem=net,
+                               extra=_spot_extra)
                 _write_paper_trade(sig, "SL_HIT",
                                    option_strike, lot, exit_prem=net)
                 sl_hits += 1
@@ -490,25 +513,36 @@ def check_outcomes(lot_sizes: Dict[str, int] = None) -> Tuple[int, int, int]:
             if current_price is None or current_price <= 0:
                 continue
 
+            # Mode B IS spot tracking — spot_outcome == outcome, but we
+            # persist it so _clean_won() finds it on the same key path.
+            def _b_extra(oc_b, exit_b):
+                _pnl_b = ((exit_b - entry) / entry * 100 if direction == "long"
+                          else (entry - exit_b) / entry * 100) if entry > 0 else 0.0
+                return {"spot_outcome": oc_b, "spot_pnl_pct": round(_pnl_b, 2)}
+
             if direction == "long":
                 if target > 0 and current_price >= target:
-                    resolve_signal(sig["signal_id"], "TARGET_HIT", target, lot_size=lot)
+                    resolve_signal(sig["signal_id"], "TARGET_HIT", target,
+                                   lot_size=lot, extra=_b_extra("TARGET_HIT", target))
                     _write_paper_trade(sig, "TARGET_HIT", target, lot)
                     target_hits += 1
                     log.info(f"[Tracker] TARGET_HIT {sym} @ {target:.2f}")
                 elif sl > 0 and current_price <= sl:
-                    resolve_signal(sig["signal_id"], "SL_HIT", sl, lot_size=lot)
+                    resolve_signal(sig["signal_id"], "SL_HIT", sl,
+                                   lot_size=lot, extra=_b_extra("SL_HIT", sl))
                     _write_paper_trade(sig, "SL_HIT", sl, lot)
                     sl_hits += 1
                     log.info(f"[Tracker] SL_HIT {sym} @ {sl:.2f}")
             else:
                 if target > 0 and current_price <= target:
-                    resolve_signal(sig["signal_id"], "TARGET_HIT", target, lot_size=lot)
+                    resolve_signal(sig["signal_id"], "TARGET_HIT", target,
+                                   lot_size=lot, extra=_b_extra("TARGET_HIT", target))
                     _write_paper_trade(sig, "TARGET_HIT", target, lot)
                     target_hits += 1
                     log.info(f"[Tracker] TARGET_HIT {sym} @ {target:.2f}")
                 elif sl > 0 and current_price >= sl:
-                    resolve_signal(sig["signal_id"], "SL_HIT", sl, lot_size=lot)
+                    resolve_signal(sig["signal_id"], "SL_HIT", sl,
+                                   lot_size=lot, extra=_b_extra("SL_HIT", sl))
                     _write_paper_trade(sig, "SL_HIT", sl, lot)
                     sl_hits += 1
                     log.info(f"[Tracker] SL_HIT {sym} @ {sl:.2f}")
