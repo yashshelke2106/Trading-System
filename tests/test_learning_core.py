@@ -382,3 +382,38 @@ def test_journal_stamp_dedup_and_resolve_extra(tmp_path, monkeypatch):
     assert row["outcome"] == "TARGET_HIT"
     assert row["spot_outcome"] == "TARGET_HIT"       # H1 extra persisted
     assert row["mfe_pct"] == 2.1
+    # pnl_pct computed: spot path → (106 - 100) / 100 * 100 = 6.0
+    assert row["pnl_pct"] == 6.0
+
+
+def test_resolve_pnl_pct_option_path(tmp_path, monkeypatch):
+    """resolve_signal computes pnl_pct from premium move when entry_prem present."""
+    import core.signal_journal as J
+    jf = str(tmp_path / "j.jsonl")
+    monkeypatch.setattr(J, "JOURNAL_FILE", jf)
+    J._seq_counters.clear()
+
+    sig = {"symbol": "XYZ", "direction": "long", "entry_price": 500,
+           "sl_price": 490, "target_price": 530, "entry_prem": 20.0}
+    sid = J.record_signal(sig)
+    J.resolve_signal(sid, "TARGET_HIT", 530.0, exit_prem=28.0)
+    row = [json.loads(l) for l in open(jf) if l.strip()][0]
+    # (28 - 20) / 20 * 100 = 40.0%
+    assert row["pnl_pct"] == 40.0
+    assert row["pnl_rupees"] == 8.0   # (28-20) * lot=1
+
+
+def test_resolve_pnl_pct_short_spot_path(tmp_path, monkeypatch):
+    """resolve_signal computes pnl_pct correctly for shorts (spot path)."""
+    import core.signal_journal as J
+    jf = str(tmp_path / "j.jsonl")
+    monkeypatch.setattr(J, "JOURNAL_FILE", jf)
+    J._seq_counters.clear()
+
+    sig = {"symbol": "DEF", "direction": "short", "entry_price": 200,
+           "sl_price": 210, "target_price": 180}
+    sid = J.record_signal(sig)
+    J.resolve_signal(sid, "TARGET_HIT", 180.0)
+    row = [json.loads(l) for l in open(jf) if l.strip()][0]
+    # short: (200 - 180) / 200 * 100 = 10.0%
+    assert row["pnl_pct"] == 10.0

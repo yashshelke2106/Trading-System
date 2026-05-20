@@ -78,17 +78,17 @@ def record_signal(signal: Dict) -> str:
     direction = signal.get("direction", "")
     today = date.today().isoformat()
 
-    # Deduplicate: only 1 open signal per (symbol, direction, date).
+    # Deduplicate: only 1 signal per (symbol, direction, date) — open OR resolved.
     # Scanner runs every 30s; without this we'd get 720 identical entries/day.
+    # Also prevents re-entry after SL hit on same day (same thesis, same result).
     with _lock:
         if os.path.exists(JOURNAL_FILE):
             existing = _load_all()
             for r in existing:
                 if (r.get("symbol") == sym
                         and r.get("direction") == direction
-                        and r.get("outcome") is None
                         and r.get("ts", "")[:10] == today):
-                    return r["signal_id"]  # already tracking this signal
+                    return r["signal_id"]  # already tracked (open or resolved)
 
     signal_id = _make_signal_id(sym)
 
@@ -193,6 +193,25 @@ def resolve_signal(signal_id: str, outcome: str,
                 r["exit_price"] = exit_price
                 r["exit_ts"]    = exit_ts or datetime.now().isoformat()
                 r["pnl_rupees"] = round(pnl, 2)
+                # Compute pnl_pct — the field adaptive_learner reads.
+                # Option path: % change on entry premium.
+                # Spot path:   % change on entry spot.
+                if entry_prem and exit_prem is not None and float(entry_prem) > 0:
+                    r["pnl_pct"] = round(
+                        (exit_prem - float(entry_prem)) / float(entry_prem) * 100, 2
+                    )
+                else:
+                    entry_spot = float(r.get("entry_price", 0))
+                    if entry_spot > 0:
+                        direction = r.get("direction", "long")
+                        if direction == "long":
+                            r["pnl_pct"] = round(
+                                (exit_price - entry_spot) / entry_spot * 100, 2
+                            )
+                        else:
+                            r["pnl_pct"] = round(
+                                (entry_spot - exit_price) / entry_spot * 100, 2
+                            )
                 if extra:
                     for k, v in extra.items():
                         if v is not None:

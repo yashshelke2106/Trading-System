@@ -62,7 +62,7 @@ TUNABLE_PARAMS: Dict[str, Tuple[float, float, float, float, str]] = {
     # stock move at ~1.2% (journal median) → ~15% premium, never the 50%
     # goal. Floor 2.5R x 1.2% SL = 3% stock ≈ 40-50% premium. Ceil 5.0R for
     # genuine trend/top-mover runners.
-    "rr_ratio":               (3.0,  2.5,  5.0,  0.25, "SIGNAL_CONFIG"),
+    "rr_ratio":               (4.0,  2.5,  5.0,  0.25, "SIGNAL_CONFIG"),
     "vol_surge_threshold":    (1.5,  1.2,  3.0,  0.1,  "SIGNAL_CONFIG"),
     # Capped at 50: top movers often have moderate strength scores. Multi-TF enforces quality.
     "min_strength":           (35,   25,   50,   5,    "SIGNAL_CONFIG"),

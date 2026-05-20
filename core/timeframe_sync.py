@@ -27,7 +27,7 @@ Grade thresholds: A≥80  B≥55  C≥30  D suppressed
 SL:      15m swing structure, capped at 2×ATR_15m
 sl_tight: 5m entry-candle extreme (aggressive entry, tighter RR)
 target_1: entry ± 1×risk  (T1 — scale out 50% here, move SL to breakeven)
-target_price / T2: entry ± 2×risk  (T2 — runner target, minimum 1:2 RR)
+target_price / T2: entry ± 4×risk  (T2 — runner target, default 4.0R)
 """
 import time, threading
 from concurrent.futures import ThreadPoolExecutor
@@ -435,9 +435,9 @@ class TimeframeSyncEngine:
 
         try:
             from core.adaptive_learner import get_learned_config as _glc_rr
-            rr_ratio = float(_glc_rr().get("SIGNAL_CONFIG", {}).get("rr_ratio", 2.0))
+            rr_ratio = float(_glc_rr().get("SIGNAL_CONFIG", {}).get("rr_ratio", 4.0))
         except Exception:
-            rr_ratio = 2.0
+            rr_ratio = 4.0
 
         t1 = (entry + risk)            if lng else (entry - risk)             # 1:1 partial
         t2 = (entry + risk * rr_ratio) if lng else (entry - risk * rr_ratio)  # adaptive main target
@@ -1010,17 +1010,17 @@ class TimeframeSyncEngine:
         levels["sl"] = round(sl, 2)
         risk = sl_dist_raw
 
-        # Multi-target — T1 close so it actually fills (max real win = 2.86%),
+        # Multi-target — T1 close so it actually fills,
         # T2 runner from learned config (regime/top-mover overrides apply):
         #   T1 = 1.5R → partial exit, move SL to breakeven
-        #   T2 = rr_ratio (default 3.0R, up to 5.0R for extreme movers)
+        #   T2 = rr_ratio (default 4.0R, up to 5.0R for extreme movers)
         rr_t1 = 1.5
-        rr_t2 = float(_learned_sig.get("rr_ratio", 3.0))
+        rr_t2 = float(_learned_sig.get("rr_ratio", 4.0))
         levels["t1"] = round(entry + risk * rr_t1, 2) if d5 == "long" else round(entry - risk * rr_t1, 2)
         levels["t2"] = round(entry + risk * rr_t2, 2) if d5 == "long" else round(entry - risk * rr_t2, 2)
 
-        # Primary target = T2 (2.5R) — runners capture real moves
-        # Partial exit at T1 locks 1.5R profit, runner aims for 2.5R+
+        # Primary target = T2 (4.0R) — runners capture real moves
+        # Partial exit at T1 locks 1.5R profit, runner aims for 4.0R+
         primary_target = levels["t2"]
 
         return SyncedSignal(
