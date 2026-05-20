@@ -126,8 +126,8 @@ def _scan(engine, api, top_n, universe=None):
                     "theta":         rec.get("theta"),
                 })
                 if oi:
-                    s["confluence_score"] = int(s.get("confluence_score", 0) or 0) \
-                        + int(oi.get("score_delta", 0) or 0)
+                    s["confluence_score"] = int(float(s.get("confluence_score", 0) or 0)) \
+                        + int(float(oi.get("score_delta", 0) or 0))
                     s["oi_quadrant"]  = oi.get("quadrant")
                     s["pcr"]          = oi.get("pcr")
                     s["pcr_regime"]   = oi.get("pcr_regime")

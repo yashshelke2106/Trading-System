@@ -787,13 +787,18 @@ async def ws_signals(websocket: WebSocket):
                     })
             # 3s poll: scanner writes every 30s anyway, no need to check 30x per write
             await asyncio.sleep(3)
-    except (WebSocketDisconnect, Exception):
+    except WebSocketDisconnect:
         pass
+    except Exception as e:
+        print(f"[WS] /ws/signals handler error: {e}")
 
 
 if __name__ == "__main__":
     import uvicorn
     # reload=False — auto-reload adds 100-500ms latency. Enable only for dev.
-    uvicorn.run("api_server:app", host="0.0.0.0", port=8000,
+    # /api/config/* endpoints write Dhan credentials with no auth.
+    # Bind loopback by default so LAN devices can't POST tokens.
+    # Set API_HOST=0.0.0.0 only after adding auth (or accepting the risk).
+    uvicorn.run("api_server:app", host=os.getenv("API_HOST", "127.0.0.1"), port=8000,
                 reload=os.getenv("API_RELOAD", "0") == "1",
                 workers=1, log_level="warning")

@@ -52,8 +52,12 @@ class BlackScholesModel:
                        time_to_expiry: float, iv: float,
                        option_type: str = "CE") -> OptionGreeks:
         if time_to_expiry <= 0:
+            if option_type == "CE":
+                delta_at_exp = 1.0 if spot > strike else 0.0
+            else:
+                delta_at_exp = -1.0 if strike > spot else 0.0
             return OptionGreeks(
-                delta=1 if option_type == "CE" and spot > strike else 0,
+                delta=delta_at_exp,
                 gamma=0,
                 theta=0,
                 vega=0,

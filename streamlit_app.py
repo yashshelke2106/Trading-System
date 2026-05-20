@@ -2123,6 +2123,7 @@ def render_learning_fragment() -> None:
                     st.success(f"Updated {len(changes)} params: {list(changes.keys())}")
                 else:
                     st.info("No parameter changes warranted at this time.")
+                st.rerun()
             if c_reset.button("Reset all params to defaults", use_container_width=True):
                 learner.reset_all()
                 st.success("All learned parameters reset to defaults.")

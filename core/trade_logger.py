@@ -179,8 +179,10 @@ class TradeLogger:
                     break
         
         df = pd.DataFrame(self.trades)
-        df.to_csv(self.log_file, index=False)
-        
+        tmp = f"{self.log_file}.tmp"
+        df.to_csv(tmp, index=False)
+        os.replace(tmp, self.log_file)
+
         self._update_stats()
 
     def _get_attr(self, obj, key, default=None):
@@ -368,8 +370,10 @@ class TradeLogger:
             'entry_quality': quality,
         }
         
-        with open(self.stats_file, 'w') as f:
+        tmp = f"{self.stats_file}.tmp"
+        with open(tmp, 'w') as f:
             json.dump(stats, f, indent=2)
+        os.replace(tmp, self.stats_file)
 
     def _update_learning(self):
         learnings = {
@@ -378,8 +382,10 @@ class TradeLogger:
             'recommendations': self._generate_recommendations(),
         }
         
-        with open(self.learning_file, 'w') as f:
+        tmp = f"{self.learning_file}.tmp"
+        with open(tmp, 'w') as f:
             json.dump(learnings, f, indent=2)
+        os.replace(tmp, self.learning_file)
 
     def _generate_insights(self) -> List[str]:
         insights = []
