@@ -177,12 +177,19 @@ def _estimate_premium_at_spot(chain: List[Dict], option_type: str,
     spot_delta = target_spot - entry_spot  # positive = spot going up
     key = "ce_ltp" if option_type == "CE" else "pe_ltp"
 
-    # For CE: spot up by X → premium ≈ strike (entry_strike - X) CE premium now
-    # For PE: spot down by X → premium ≈ strike (entry_strike + X) PE premium now
-    if option_type == "CE":
-        proxy_strike = entry_strike - spot_delta
-    else:
-        proxy_strike = entry_strike + spot_delta
+    # Moneyness displacement: when spot moves, the option's premium
+    # resembles a different-strike option at CURRENT spot.
+    #
+    # CE: spot up by +X  → CE deeper ITM → like (strike - X) CE now.
+    # PE: spot down by -X (spot_delta<0) → PE deeper ITM → like
+    #     (strike - |spot_delta|) PE = (strike - spot_delta) PE now.
+    #     i.e. the SAME formula as CE: proxy = entry_strike - spot_delta.
+    #
+    # Both option types use the same sign because moneyness for CE
+    # increases when strike decreases, and for PE it increases when
+    # strike increases — but spot_delta's sign already encodes the
+    # direction, so the subtraction is correct for both.
+    proxy_strike = entry_strike - spot_delta
 
     # Find two nearest strikes for interpolation
     sorted_chain = sorted(chain, key=lambda r: r["strike"])

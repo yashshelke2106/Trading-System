@@ -417,3 +417,47 @@ def test_resolve_pnl_pct_short_spot_path(tmp_path, monkeypatch):
     row = [json.loads(l) for l in open(jf) if l.strip()][0]
     # short: (200 - 180) / 200 * 100 = 10.0%
     assert row["pnl_pct"] == 10.0
+
+
+def test_pe_proxy_strike_premium_rises_when_spot_drops():
+    """Regression: _estimate_premium_at_spot had inverted PE proxy strike.
+
+    For PE (put) options, when spot drops (short signal's target), the put
+    gets deeper ITM → premium RISES. The chain proxy strike should map to
+    a deeper-ITM strike (higher strike PE), not a further-OTM one.
+
+    Old bug: proxy = entry_strike + spot_delta → for spot_delta < 0 gave
+    a LOWER strike (OTM PE = cheaper = wrong). Fixed to proxy = entry_strike
+    - spot_delta for both CE and PE.
+    """
+    from core.option_translator import _estimate_premium_at_spot
+
+    # Fake chain: strikes 3000–3600 at 100 intervals
+    # PE LTPs: lower strike = further OTM = cheaper; higher = deeper ITM = expensive
+    chain = [
+        {"strike": 3000, "pe_ltp": 5,   "ce_ltp": 250},
+        {"strike": 3100, "pe_ltp": 12,  "ce_ltp": 170},
+        {"strike": 3200, "pe_ltp": 30,  "ce_ltp": 100},
+        {"strike": 3300, "pe_ltp": 70,  "ce_ltp": 50},   # ← ATM
+        {"strike": 3400, "pe_ltp": 140, "ce_ltp": 20},
+        {"strike": 3500, "pe_ltp": 220, "ce_ltp": 8},
+        {"strike": 3600, "pe_ltp": 310, "ce_ltp": 3},
+    ]
+    entry_strike = 3300
+    entry_spot = 3300
+
+    # Short signal: target spot = 3100 (spot drops 200)
+    target_spot = 3100
+    tgt_prem = _estimate_premium_at_spot(chain, "PE", entry_strike, entry_spot, target_spot)
+    # Spot dropped 200 → PE deeper ITM → premium must RISE above 70 (entry ATM)
+    assert tgt_prem > 70, f"PE target prem should rise when spot drops, got {tgt_prem}"
+
+    # Short signal: SL spot = 3400 (spot rises 100)
+    sl_spot = 3400
+    sl_prem = _estimate_premium_at_spot(chain, "PE", entry_strike, entry_spot, sl_spot)
+    # Spot rose 100 → PE further OTM → premium must DROP below 70
+    assert sl_prem < 70, f"PE SL prem should drop when spot rises, got {sl_prem}"
+
+    # CE sanity: long target at spot 3500
+    tgt_prem_ce = _estimate_premium_at_spot(chain, "CE", entry_strike, entry_spot, 3500)
+    assert tgt_prem_ce > 50, f"CE target prem should rise when spot rises, got {tgt_prem_ce}"
