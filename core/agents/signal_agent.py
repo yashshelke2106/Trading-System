@@ -490,10 +490,14 @@ class SignalAgent(BaseAgent):
             sl_dist = max(sl_dist, entry * 0.010)
             sl_dist = min(sl_dist, entry * 0.025)
             sl = round(entry - sl_dist, 2) if signal.direction == "long" else round(entry + sl_dist, 2)
-            # Multi-target: T1=1.5R (bank partial fast — biggest win in 367
-            # trades was only 2.86%, so 2R+ targets rarely fill), T2=3.0R runner
+            # Multi-target: T1=1.5R partial, T2=rr_ratio runner (from learned config)
+            try:
+                from core.adaptive_learner import get_learned_config as _glc
+                _rr = float(_glc().get("SIGNAL_CONFIG", {}).get("rr_ratio", 4.0))
+            except Exception:
+                _rr = 4.0
             t1 = round(entry + sl_dist * 1.5, 2) if signal.direction == "long" else round(entry - sl_dist * 1.5, 2)
-            t2 = round(entry + sl_dist * 3.0, 2) if signal.direction == "long" else round(entry - sl_dist * 3.0, 2)
+            t2 = round(entry + sl_dist * _rr, 2) if signal.direction == "long" else round(entry - sl_dist * _rr, 2)
             rr_ratio = round(abs(t2 - entry) / abs(entry - sl), 2) if abs(entry - sl) > 0 else 0
 
             sig_dict = {
@@ -505,7 +509,7 @@ class SignalAgent(BaseAgent):
                 "sl_price":          sl,
                 "sl_tight":          sl,
                 "target_1":          t1,
-                "target_price":      t1,
+                "target_price":      t2,
                 "rr_ratio":          rr_ratio,
                 "volume_cascade":    vol_ratio >= 2.0,
                 "ema_stack_aligned": True,

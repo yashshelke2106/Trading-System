@@ -58,11 +58,10 @@ TUNABLE_PARAMS: Dict[str, Tuple[float, float, float, float, str]] = {
     # RSI 30-50 is bearish momentum — shorts should work there.
     "rsi_short_floor":        (30,   20,   40,   2,    "SIGNAL_CONFIG"),
     # Adaptive RR: reduce when SL hits >> target hits (brings target closer).
-    # rr_ratio floor lifted to 2.5: a 1.5-2.0R target on a ~1% SL caps the
-    # stock move at ~1.2% (journal median) → ~15% premium, never the 50%
-    # goal. Floor 2.5R x 1.2% SL = 3% stock ≈ 40-50% premium. Ceil 5.0R for
-    # genuine trend/top-mover runners.
-    "rr_ratio":               (4.0,  2.5,  5.0,  0.25, "SIGNAL_CONFIG"),
+    # rr_ratio floor 3.5: below 3.5R x 1% SL = 3.5% stock ≈ 35% premium,
+    # barely covers costs. 4.0R default x 1.5% SL = 6% stock ≈ 50%+ premium.
+    # Ceil 5.0R for genuine trend/top-mover runners.
+    "rr_ratio":               (4.0,  3.5,  5.0,  0.25, "SIGNAL_CONFIG"),
     "vol_surge_threshold":    (1.5,  1.2,  3.0,  0.1,  "SIGNAL_CONFIG"),
     # Capped at 50: top movers often have moderate strength scores. Multi-TF enforces quality.
     "min_strength":           (35,   25,   50,   5,    "SIGNAL_CONFIG"),
