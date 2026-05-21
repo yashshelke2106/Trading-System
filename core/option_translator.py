@@ -261,13 +261,13 @@ def get_option_rec(
         atm = _atm_strike(spot, step)
         option_type = "CE" if direction == "long" else "PE"
 
-        # ── Strike selection: 1-step OTM for cheaper premium → higher % gain ─
-        # ATM delta ~0.50, 1-OTM delta ~0.40-0.45 but premium 25-35% cheaper
-        # Same stock move = bigger % premium gain on cheaper option
-        if direction == "long":
-            otm_strike = atm + step   # 1 step above for CE
-        else:
-            otm_strike = atm - step   # 1 step below for PE
+        # ── Strike selection: ATM for reliable delta + liquidity ────────────
+        # 1-OTM was tried but produced penny options (sub-₹5 premium) with
+        # delta < 0.3 and massive relative spread. ATM gives delta ~0.50,
+        # liquid fills, and premium large enough that spread+theta are a
+        # manageable fraction.
+        # If ATM premium still < ₹5, step 1-ITM for usable premium.
+        MIN_USABLE_PREMIUM = 5.0  # below this, bid-ask spread > 20% of premium
 
         # ── Expiry from chain (real, not guessed) ────────────────────────────
         expiry_date = _nearest_expiry(symbol=symbol)
@@ -285,17 +285,22 @@ def get_option_rec(
         ltp_key = "pe_ltp" if option_type == "PE" else "ce_ltp"
         iv_key = "pe_iv" if option_type == "PE" else "ce_iv"
 
-        # Try 1-OTM first; fall back to ATM if OTM has no liquidity
-        otm_row = min(chain_data, key=lambda r: abs(r["strike"] - otm_strike), default=None)
         atm_row = min(chain_data, key=lambda r: abs(r["strike"] - atm), default=None)
         if not atm_row:
             return None
 
-        # Use OTM if it has decent liquidity (LTP > 0 and OI > 0)
-        use_otm = (otm_row and
-                   float(otm_row.get(ltp_key, 0) or 0) > 0 and
-                   abs(otm_row["strike"] - otm_strike) < step * 0.5)
-        chosen_row = otm_row if use_otm else atm_row
+        # Start with ATM; if premium too thin, step 1-ITM for usable premium
+        chosen_row = atm_row
+        atm_ltp = float(atm_row.get(ltp_key, 0) or 0)
+        if atm_ltp < MIN_USABLE_PREMIUM:
+            # 1-ITM: lower strike for CE, higher strike for PE
+            if direction == "long":
+                itm_strike = atm - step
+            else:
+                itm_strike = atm + step
+            itm_row = min(chain_data, key=lambda r: abs(r["strike"] - itm_strike), default=None)
+            if itm_row and float(itm_row.get(ltp_key, 0) or 0) >= MIN_USABLE_PREMIUM:
+                chosen_row = itm_row
 
         strike = float(chosen_row["strike"])
         ltp = float(chosen_row.get(ltp_key, 0) or 0)
