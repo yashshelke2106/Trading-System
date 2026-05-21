@@ -1303,12 +1303,18 @@ class SignalEngine:
                 'broken_supply_retest_long', 'ema21_pullback_long',
                 'trend_up', 'horizontal_breakout_up', 'consol_breakout_up',
                 'bull_flag_breakout', 'nr7_breakout_up', 'price_breakout_up',
+                # Breakout indicators the engine actually emits:
+                'vwap_breakout_up', 'wae_bull_explosion', 'range_filter_up',
+                'ema_bullish_cross', 'ema_stack_aligned_bull',
             }
             short_anchors = {
                 'supply_zone_rejection', 'demand_zone_bos_down',
                 'broken_demand_retest_short', 'ema21_pullback_short',
                 'trend_down', 'horizontal_breakout_down', 'consol_breakout_down',
                 'bear_flag_breakout', 'nr7_breakout_down', 'price_breakout_down',
+                # Breakout indicators the engine actually emits:
+                'vwap_breakout_down', 'wae_bear_explosion', 'range_filter_down',
+                'ema_bearish_cross', 'ema_stack_aligned_bear',
             }
             anchors = long_anchors if direction == 'long' else short_anchors
             if not (anchors & set(all_patterns)):

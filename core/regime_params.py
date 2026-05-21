@@ -27,28 +27,28 @@ DEFAULT_REGIME_PARAMS: Dict[str, Dict] = {
     "strong_bull": {
         "min_votes": 3,         # easier signals — strong tape
         "min_strength": 45,
-        "rsi_long_momentum_min": 50,
+        "rsi_long_momentum_min": 48,
         "rsi_short_floor": 35,  # shorts allowed unless extreme oversold (even in bull, reversals happen)
         "max_volume_ratio": 4.0,
-        "rr_ratio": 3.5,
+        # rr_ratio NOT set — let learned_params control (default 4.0)
         "disable_shorts": False,
     },
     "bull": {
         "min_votes": 4,
         "min_strength": 50,
-        "rsi_long_momentum_min": 55,
+        "rsi_long_momentum_min": 50,
         "rsi_short_floor": 32,  # shorts need clear bearish momentum, not just neutral RSI
         "max_volume_ratio": 3.5,
-        "rr_ratio": 3.0,
+        # rr_ratio NOT set — let learned_params control (default 4.0)
         "disable_shorts": False,
     },
     "neutral": {
-        "min_votes": 5,
-        "min_strength": 55,
-        "rsi_long_momentum_min": 60,
+        "min_votes": 4,         # 5 too restrictive — most 5m bars produce 3-4 votes
+        "min_strength": 50,
+        "rsi_long_momentum_min": 50,  # RSI 50+ is bullish territory, don't block
         "rsi_short_floor": 30,  # symmetric: shorts as easy as longs in neutral regime
         "max_volume_ratio": 3.0,
-        "rr_ratio": 2.5,
+        # rr_ratio NOT set here — let learned_params control it (default 4.0)
         "disable_shorts": False,
     },
     "bear": {
@@ -57,7 +57,7 @@ DEFAULT_REGIME_PARAMS: Dict[str, Dict] = {
         "rsi_long_momentum_min": 65,  # longs need high RSI in bear
         "rsi_short_floor": 25,        # shorts very easy in bear — almost no RSI floor
         "max_volume_ratio": 2.5,
-        "rr_ratio": 3.5,
+        # rr_ratio NOT set — let learned_params control (default 4.0)
         "disable_shorts": False,
     },
     "strong_bear": {
@@ -66,16 +66,15 @@ DEFAULT_REGIME_PARAMS: Dict[str, Dict] = {
         "rsi_long_momentum_min": 68,  # very high bar for longs
         "rsi_short_floor": 20,        # shorts essentially unrestricted in strong bear
         "max_volume_ratio": 2.0,
-        "rr_ratio": 3.5,
+        # rr_ratio NOT set — let learned_params control (default 4.0)
         "disable_shorts": False,
     },
     "volatile": {
-        "min_votes": 5,         # noise filter
-        "min_strength": 60,
-        "rsi_long_momentum_min": 65,
+        "min_votes": 4,         # was 5 — too restrictive, kills everything
+        "min_strength": 55,
+        "rsi_long_momentum_min": 55,
         "rsi_short_floor": 30,  # was 50 — killed all shorts in volatile. Both directions valid
         "max_volume_ratio": 2.5,
-        "rr_ratio": 3.5,
         "atr_sl_multiplier": 1.5,   # wider SL for volatility
         "disable_shorts": False,
     },
