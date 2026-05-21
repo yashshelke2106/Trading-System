@@ -29,12 +29,59 @@ log = logging.getLogger(__name__)
 SELECTIVE_FIRE      = True
 MIN_EXPECTANCY_R    = 0.15   # need p·rr − (1−p) ≥ this (positive w/ margin)
 SELECTIVE_FIRE_KEEP = 12     # hard cap per scan (sniper, not spray)
+MIN_VOLUME_RATIO    = 0.70   # vol < 0.7x avg = dead tape, skip
+
+# Pattern conflict sets — if signal has patterns from OPPOSING set, block.
+# Empirical: all 3 SL_HITs this week had opposing HTF patterns.
+LONG_OPPOSING = {"ema_downtrend", "supertrend_down", "ema_stack_aligned_bear",
+                 "ema_bearish_cross", "lower_high_lower_low"}
+SHORT_OPPOSING = {"ema_uptrend", "supertrend_up", "ema_stack_aligned_bull",
+                  "ema_bullish_cross", "higher_high_higher_low"}
+
+
+def _has_pattern_conflict(signal: Dict) -> bool:
+    """Check if signal has 2+ opposing HTF patterns. Strong SL predictor."""
+    direction = signal.get("direction", "long")
+    patterns_str = signal.get("patterns_combined", "") or signal.get("patterns", "")
+    if not patterns_str:
+        return False
+    patterns = set(p.strip() for p in patterns_str.split(",") if p.strip())
+    opposing = LONG_OPPOSING if direction == "long" else SHORT_OPPOSING
+    conflicts = patterns & opposing
+    if len(conflicts) >= 2:
+        log.info(f"[Conflict] {signal.get('symbol')} {direction} has "
+                 f"{len(conflicts)} opposing patterns: {conflicts}")
+        return True
+    return False
 
 
 def finalize_and_select(signals: List[Dict]) -> List[Dict]:
     """Calibrate + expectancy-gate a list of enriched signal dicts."""
     if not signals:
         return signals
+
+    # Pre-filter: pattern conflict + volume floor
+    pre_count = len(signals)
+    filtered = []
+    for s in signals:
+        # Pattern conflict: 2+ opposing HTF patterns = strong SL predictor
+        if _has_pattern_conflict(s):
+            continue
+        # Volume floor: all SL_HITs had vol < 0.7x, all winners > 1.0x
+        vol = s.get("volume_ratio") or s.get("vol_ratio")
+        if vol is not None:
+            try:
+                vol_f = float(vol)
+                if vol_f < MIN_VOLUME_RATIO:
+                    log.info(f"[VolFloor] {s.get('symbol')} vol={vol_f:.2f} < {MIN_VOLUME_RATIO}")
+                    continue
+            except (ValueError, TypeError):
+                pass
+        filtered.append(s)
+    if pre_count > len(filtered):
+        log.info(f"[PreFilter] {pre_count} -> {len(filtered)} "
+                 f"(conflict/vol dropped {pre_count - len(filtered)})")
+    signals = filtered
 
     try:
         from core.calibrator import get_calibrator

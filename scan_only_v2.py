@@ -156,6 +156,19 @@ def _scan(engine, api, top_n, universe=None):
     # keep only positive-expectancy signals, rank best-edge-first, cap.
     sigs = finalize_and_select(enriched)
 
+    # Monte Carlo simulation: enrich signals with probability estimates
+    if sigs:
+        try:
+            from core.monte_carlo import simulate_batch
+            sigs = simulate_batch(sigs, n_sims=1000)  # 1k sims for speed in scanner
+            mc_valid = [s for s in sigs if s.get("mc_p_target") is not None]
+            if mc_valid:
+                mc_pos = sum(1 for s in mc_valid if s.get("mc_edge", 0) > 0)
+                print(f'  [MC] {len(mc_valid)}/{len(sigs)} simulated, '
+                      f'{mc_pos} positive-edge')
+        except Exception as e:
+            log.debug(f"MC batch failed: {e}")
+
     # Write enriched signals (option fields now present for UI)
     write_signals(sigs, meta={"elapsed_sec": elapsed, "universe_size": len(universe)})
 
@@ -166,16 +179,19 @@ def _scan(engine, api, top_n, universe=None):
     print(f'  Grade S={s_ct}  A={a}  B={b}  C={c}  total={len(sigs)}')
     top = sigs[:top_n]
     if top:
-        print(f'  {"Symbol":<14} {"Dir":<6} {"Grd":<4} {"Score":>5} {"Entry":>9} {"SL":>9}  Reason')
-        print('  ' + '-' * 75)
+        print(f'  {"Symbol":<14} {"Dir":<6} {"Grd":<4} {"Score":>5} {"Entry":>9} {"SL":>9} {"MC":>6}  Reason')
+        print('  ' + '-' * 82)
         for s in top:
             grade = s["confluence_grade"]
             prefix = '* ' if grade == 'S' else '  '
+            mc_edge = s.get("mc_edge")
+            mc_str = f'{mc_edge:+.2f}' if mc_edge is not None else '  n/a'
             line = (
                 f'{prefix}{s["symbol"]:<14} {s["direction"].upper():<6} '
                 f'{grade:<4} {s["confluence_score"]:>5} '
-                f'{s["entry_price"]:>9.2f} {s["sl_price"]:>9.2f}  '
-                f'{s["reason"][:48]}'
+                f'{s["entry_price"]:>9.2f} {s["sl_price"]:>9.2f} '
+                f'{mc_str:>6}  '
+                f'{s["reason"][:44]}'
             )
             if grade == 'S':
                 line += ' [~75-80% WR T1]'
