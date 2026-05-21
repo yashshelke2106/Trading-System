@@ -502,9 +502,11 @@ def check_outcomes(lot_sizes: Dict[str, int] = None) -> Tuple[int, int, int]:
                         log.info(f"[Tracker] REPLAY TIME_EXIT {sym} @ {real_exit:.2f} "
                                  f"pnl={res['pnl_pct']:+.2f}% mfe={res['mfe_pct']:+.2f}%")
                 except Exception as e:
-                    # Fallback to legacy stub if replay fails
-                    log.warning(f"[Tracker] exit_replay failed {sym}: {e} — using stub")
-                    resolve_signal(sig["signal_id"], "EXPIRED", entry, lot_size=lot)
+                    # Fallback: mark EXPIRED but flag replay_failed so learner
+                    # can exclude this from training (pnl=0 would corrupt weights)
+                    log.warning(f"[Tracker] exit_replay failed {sym}: {e} — stub with replay_failed flag")
+                    resolve_signal(sig["signal_id"], "EXPIRED", entry, lot_size=lot,
+                                   extra={"replay_failed": True})
                     _write_paper_trade(sig, "EXPIRED", entry, lot)
                     expired += 1
                 continue

@@ -272,6 +272,9 @@ class AdaptiveLearner:
         for r in resolved:
             if r.get("outcome") not in accepted or not _has_complete_data(r):
                 continue
+            # Skip replay-failed stubs — pnl=0 corrupts weight learning
+            if r.get("replay_failed"):
+                continue
             # Always work on a copy; attach the clean signal-skill label
             # and the magnitude weight for the pattern-reinforcement rule.
             r = {**r}
@@ -446,7 +449,8 @@ class AdaptiveLearner:
     def _compute_regime_stats(self, decided: List[Dict]) -> Dict[str, Dict]:
         stats: Dict[str, Dict] = defaultdict(lambda: {"wins": 0, "losses": 0, "total_pnl": 0.0})
         for sig in decided:
-            win = sig["outcome"] == "TARGET_HIT"
+            # Use clean (spot-denoised) win label — consistent with pattern stats
+            win = bool(sig.get("_won_clean", sig.get("outcome") == "TARGET_HIT"))
             pnl = float(sig.get("pnl_rupees") or 0)
             # By session
             sess = sig.get("session", "unknown")
@@ -498,7 +502,40 @@ class AdaptiveLearner:
         # which is confidence-shrunk and self-limiting, runs continuously.
         coarse = n >= MIN_TRADES_FOR_UPDATE
 
-        if coarse:
+        # ── Anti-starvation guard ──────────────────────────────────────────
+        # If signal count is dangerously low, REVERSE tightening instead of
+        # letting the learner spiral into zero signals. FreqTrade hyperopt
+        # penalizes low trade count — we do the same live.
+        _starvation = False
+        if coarse and len(decided) < 8:
+            log.warning(f"[Learner] STARVATION: only {len(decided)} decided signals "
+                        f"in window — reversing tightening params")
+            _sc = "SIGNAL_CONFIG"
+            _reversals = {
+                "min_strength": ("min_strength", 35),   # loosen
+                "min_votes": ("min_votes", 3),           # loosen
+                "rr_ratio": ("rr_ratio", 4.0),           # pull back from ceiling
+            }
+            for key, (param, safe_val) in _reversals.items():
+                cur = float(self._params.get(_sc, {}).get(param, safe_val))
+                default, lo, hi, step, _ = TUNABLE_PARAMS[param]
+                if cur > safe_val:
+                    self._set_param(_sc, param, safe_val)
+                    changes[f"starvation:{key}"] = {
+                        "from": cur, "to": safe_val,
+                        "reason": f"signal starvation ({len(decided)} trades) — resetting to safe value"
+                    }
+            _vc = "VOLUME_EXIT_CONFIG"
+            cur_vol = float(self._params.get(_vc, {}).get("entry_min_vol_ratio", 2.0))
+            if cur_vol > 2.5:
+                self._set_param(_vc, "entry_min_vol_ratio", 2.0)
+                changes["starvation:entry_min_vol_ratio"] = {
+                    "from": cur_vol, "to": 2.0,
+                    "reason": f"signal starvation — vol threshold too high"
+                }
+            _starvation = True
+
+        if coarse and not _starvation:
             # ── Rule 1: min_votes ───────────────────────────────────────────
             changes.update(self._tune_vote_threshold(decided, overall_wr))
             # ── Rule 2: RSI thresholds ──────────────────────────────────────
@@ -518,7 +555,7 @@ class AdaptiveLearner:
         # continuously and to force on thin data (small n → small move).
         changes.update(self._tune_pattern_weights(decided, overall_wr))
 
-        if coarse:
+        if coarse and not _starvation:
             # ── Rule 8: feature threshold calibration ───────────────────────
             changes.update(self._tune_feature_thresholds(wins, losses, overall_wr))
             # ── Rule 9: RSI momentum zone floor for longs ───────────────────

@@ -712,16 +712,16 @@ class TimeframeSyncEngine:
         W_FRESH_ENTRY   = int(_sw.get("score_fresh_entry",   10))
         W_VWAP          = int(_sw.get("score_vwap_align",     5))
 
-        # ── Symmetric extreme-RSI guard ─────────────────────────────────────
-        # Block shorts only at EXTREME oversold (< rsi_short_floor) — bounce risk.
-        # Block longs at EXTREME overbought (> 100 - rsi_short_floor) — top risk.
-        # rsi_short_floor default is 30 → mirror ceiling is 70.
+        # ── Extreme-RSI guard ─────────────────────────────────────────────
+        # Block shorts at EXTREME oversold (< rsi_short_floor) — bounce risk.
+        # Block longs at EXTREME overbought (> 80) — reversal risk.
+        # NOT symmetric: RSI 70-80 is momentum zone for longs, not a kill zone.
         try:
             _rsi_sf = float(_sw.get("rsi_short_floor")
                             or get_learned_config().get("SIGNAL_CONFIG", {}).get("rsi_short_floor", 30))
         except Exception:
             _rsi_sf = 30.0
-        _rsi_lc = 100.0 - _rsi_sf  # symmetric long ceiling
+        _rsi_lc = 80.0  # only kill longs at extreme overbought, not at 70
         if not lng and s5.rsi < _rsi_sf:
             return None
         if lng and s5.rsi > _rsi_lc:

@@ -155,7 +155,7 @@ class SignalEngine:
                               period: int = 10, multiplier: float = 3.0) -> Tuple[bool, float]:
         """Returns (in_uptrend, supertrend_support_level)."""
         if len(df) < period + 2:
-            return True, float(df['close'].iloc[-1])
+            return None, float(df['close'].iloc[-1])
 
         high, low, close = df['high'].values, df['low'].values, df['close'].values
         atr_period = period
@@ -1127,10 +1127,11 @@ class SignalEngine:
 
         # ── 8. Supertrend ────────────────────────────────────────────────
         st_uptrend, st_level = self.calculate_supertrend(df)
-        if st_uptrend:
-            long_votes += 1; all_patterns.append('supertrend_up')
-        else:
-            short_votes += 1; all_patterns.append('supertrend_down')
+        if st_uptrend is not None:  # None = insufficient data, skip vote
+            if st_uptrend:
+                long_votes += 1; all_patterns.append('supertrend_up')
+            else:
+                short_votes += 1; all_patterns.append('supertrend_down')
 
         # ── 9. Candlestick patterns (pin bar / engulfing) ────────────────
         lv, sv, pats = self.detect_candlestick_patterns(df)
@@ -1256,7 +1257,7 @@ class SignalEngine:
                            f"only {clean_count} clean (need {MIN_VOTES})")
                 return None
 
-        rsi_short_ceil = float(effective_config.get('rsi_short_floor', 50))
+        rsi_short_ceil = float(effective_config.get('rsi_short_floor', 30))
 
         if long_votes >= MIN_VOTES and long_votes >= short_votes + MIN_LEAD:
             # Skip mid-RSI longs — journal: losers avg RSI 53.8, winners 64.7
