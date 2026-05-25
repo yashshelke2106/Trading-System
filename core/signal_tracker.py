@@ -305,6 +305,81 @@ def check_outcomes(lot_sizes: Dict[str, int] = None) -> Tuple[int, int, int]:
         except Exception:
             sig_age_h = 0.0
 
+        # ── Mode C: Volatility (straddle/strangle) — combined premium tracking ──
+        if sig.get("strategy") in ("STRADDLE", "STRANGLE"):
+            try:
+                from core.dashboard_data import get_option_chain
+                chain = get_option_chain(sym) or []
+                if not chain:
+                    continue
+
+                strategy = sig["strategy"]
+                ce_entry = float(sig.get("ce_entry_prem", 0) or 0)
+                pe_entry = float(sig.get("pe_entry_prem", 0) or 0)
+                entry_combined = float(sig.get("combined_premium", ce_entry + pe_entry))
+                target_combined = float(sig.get("target_combined", 0) or 0)
+                sl_combined = float(sig.get("sl_combined", 0) or 0)
+
+                if strategy == "STRADDLE":
+                    atm = float(sig.get("atm_strike", 0))
+                    row = min(chain, key=lambda r: abs(float(r.get("strike", 0)) - atm))
+                    ce_cur = float(row.get("ce_ltp", 0) or 0)
+                    pe_cur = float(row.get("pe_ltp", 0) or 0)
+                else:  # STRANGLE
+                    ce_strike = float(sig.get("ce_strike", 0))
+                    pe_strike = float(sig.get("pe_strike", 0))
+                    ce_row = min(chain, key=lambda r: abs(float(r.get("strike", 0)) - ce_strike))
+                    pe_row = min(chain, key=lambda r: abs(float(r.get("strike", 0)) - pe_strike))
+                    ce_cur = float(ce_row.get("ce_ltp", 0) or 0)
+                    pe_cur = float(pe_row.get("pe_ltp", 0) or 0)
+
+                cur_combined = ce_cur + pe_cur
+
+                # Hard exit at 14:30 IST regardless of P&L
+                from datetime import time as _t
+                hard_exit_now = now.time() >= _t(14, 30)
+
+                if hard_exit_now or sig_age_h > MAX_SIGNAL_AGE_HOURS:
+                    oc = "TARGET_HIT" if cur_combined > entry_combined else "SL_HIT"
+                    pnl_pct = (cur_combined - entry_combined) / entry_combined * 100 if entry_combined > 0 else 0
+                    resolve_signal(sig["signal_id"], oc, sig.get("entry_price", 0),
+                                   lot_size=lot, exit_prem=cur_combined,
+                                   extra={"strategy": strategy, "pnl_pct": pnl_pct,
+                                          "exit_reason": "hard_exit_eod" if hard_exit_now else "expired"})
+                    _write_paper_trade(sig, oc, sig.get("entry_price", 0),
+                                       lot, exit_prem=cur_combined)
+                    if oc == "TARGET_HIT":
+                        target_hits += 1
+                    else:
+                        sl_hits += 1
+                    log.info(f"[VolTracker] {strategy} {sym} EOD exit: "
+                             f"entry={entry_combined:.2f} cur={cur_combined:.2f} pnl={pnl_pct:+.1f}%")
+                    continue
+
+                # Target hit: combined gained +30%
+                if target_combined > 0 and cur_combined >= target_combined:
+                    pnl_pct = (cur_combined - entry_combined) / entry_combined * 100
+                    resolve_signal(sig["signal_id"], "TARGET_HIT", sig.get("entry_price", 0),
+                                   lot_size=lot, exit_prem=cur_combined,
+                                   extra={"strategy": strategy, "pnl_pct": pnl_pct})
+                    _write_paper_trade(sig, "TARGET_HIT", sig.get("entry_price", 0),
+                                       lot, exit_prem=cur_combined)
+                    target_hits += 1
+                    log.info(f"[VolTracker] {strategy} {sym} TARGET combined={cur_combined:.2f} (+{pnl_pct:.1f}%)")
+                # SL hit: combined dropped -40%
+                elif sl_combined > 0 and cur_combined <= sl_combined:
+                    pnl_pct = (cur_combined - entry_combined) / entry_combined * 100
+                    resolve_signal(sig["signal_id"], "SL_HIT", sig.get("entry_price", 0),
+                                   lot_size=lot, exit_prem=cur_combined,
+                                   extra={"strategy": strategy, "pnl_pct": pnl_pct})
+                    _write_paper_trade(sig, "SL_HIT", sig.get("entry_price", 0),
+                                       lot, exit_prem=cur_combined)
+                    sl_hits += 1
+                    log.info(f"[VolTracker] {strategy} {sym} SL combined={cur_combined:.2f} ({pnl_pct:.1f}%)")
+            except Exception as e:
+                log.warning(f"[VolTracker] {sym} error: {e}")
+            continue
+
         entry_prem = sig.get("entry_prem")
 
         if entry_prem:

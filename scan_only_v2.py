@@ -48,7 +48,7 @@ def _market_open():
     return (_OPEN[0]*60 + _OPEN[1]) <= cur <= (_CLOSE[0]*60 + _CLOSE[1])
 
 
-def _scan(engine, api, top_n, universe=None, orb_only=False):
+def _scan(engine, api, top_n, universe=None, orb_only=False, vol_only=False):
     global _scan_count
     universe = universe or FO_UNIVERSE
     ts = datetime.now().strftime('%H:%M:%S')
@@ -79,9 +79,40 @@ def _scan(engine, api, top_n, universe=None, orb_only=False):
     except Exception as e:
         log.debug(f"ORB detection failed: {e}")
 
+    # ── VOLATILITY STRATEGY (compression → expansion straddles/strangles) ──
+    vol_sigs = []
+    try:
+        from core.volatility_strategy import detect_vol_signal, is_vol_window_active
+        from core.dashboard_data import get_option_chain
+        v_active, v_phase = is_vol_window_active()
+        if v_active:
+            print(f'[{ts}] VOL window active (phase={v_phase})')
+            # Only scan top-N by liquidity to keep latency low (compression rare)
+            vol_universe = universe[:30] if len(universe) > 30 else universe
+            for sym in vol_universe:
+                try:
+                    df_5m = api.get_intraday_data(sym, interval=5, days_back=1)
+                    df_1d = api.get_daily_data(sym, days=60) if hasattr(api, 'get_daily_data') else None
+                    chain = get_option_chain(sym)
+                    if not chain:
+                        continue
+                    vsig = detect_vol_signal(sym, df_5m, df_1d, chain)
+                    if vsig:
+                        vol_sigs.append(vsig)
+                except Exception:
+                    continue
+            if vol_sigs:
+                print(f'  [VOL] {len(vol_sigs)} compression setups: '
+                      f'{", ".join(s["symbol"] + ":" + s["strategy"] for s in vol_sigs[:5])}')
+    except Exception as e:
+        log.debug(f"Vol strategy failed: {e}")
+
     if orb_only:
         sigs = orb_sigs
         print(f'  [ORB-ONLY] {len(sigs)} signals (pattern voting disabled)')
+    elif vol_only:
+        sigs = vol_sigs
+        print(f'  [VOL-ONLY] {len(sigs)} compression signals (other strategies disabled)')
     else:
         print(f'[{ts}] Scanning {len(universe)} symbols (1D+15m+5m confluence)...')
         sigs = engine.scan_universe(api, universe)
@@ -91,6 +122,10 @@ def _scan(engine, api, top_n, universe=None, orb_only=False):
             sigs = [s for s in sigs if s["symbol"] not in orb_syms]
             sigs.extend(orb_sigs)
             print(f'  [ORB] {len(orb_sigs)} ORB signals merged into pipeline')
+        # Add vol signals (don't replace — vol is direction-agnostic, complementary)
+        if vol_sigs:
+            sigs.extend(vol_sigs)
+            print(f'  [VOL] {len(vol_sigs)} vol-expansion signals added')
 
     elapsed = round((datetime.now() - t0).total_seconds(), 2)
 
@@ -216,15 +251,17 @@ def _scan(engine, api, top_n, universe=None, orb_only=False):
                     pass
 
                 # Entry guard: block known bias modes (dead vol, RSI extremes, VWAP, etc.)
-                # Setup-matched signals bypass.
-                try:
-                    from core.entry_guard import check_entry
-                    ok, reason = check_entry(s)
-                    if not ok:
-                        dropped_no_chain.append(s["symbol"] + f"(guard:{reason})")
-                        continue  # KILL signal
-                except Exception:
-                    pass
+                # Setup-matched signals bypass. Vol/ORB strategies bypass too —
+                # they have their own validation logic.
+                if s.get("strategy") not in ("STRADDLE", "STRANGLE", "ORB"):
+                    try:
+                        from core.entry_guard import check_entry
+                        ok, reason = check_entry(s)
+                        if not ok:
+                            dropped_no_chain.append(s["symbol"] + f"(guard:{reason})")
+                            continue  # KILL signal
+                    except Exception:
+                        pass
 
                 # Breakout profile match: score current vs stock's historical fingerprint
                 try:
@@ -288,10 +325,12 @@ def _scan(engine, api, top_n, universe=None, orb_only=False):
         from core.pullback_entry import get_queue
         queue = get_queue()
         # Step 1: add new setups to pending queue
-        # EXCEPTION: ORB signals bypass pullback — range edge IS the entry level
-        orb_signals = [s for s in setups if s.get("strategy") == "ORB"]
-        non_orb = [s for s in setups if s.get("strategy") != "ORB"]
-        for s in non_orb:
+        # EXCEPTION: ORB and VOL signals bypass pullback
+        #   - ORB: range edge IS the entry level (no retest needed)
+        #   - VOL: direction-agnostic, premium-based entry/exit
+        bypass_pullback = [s for s in setups if s.get("strategy") in ("ORB", "STRADDLE", "STRANGLE")]
+        normal_setups = [s for s in setups if s.get("strategy") not in ("ORB", "STRADDLE", "STRANGLE")]
+        for s in normal_setups:
             queue.add(s)
 
         # Step 2: check pending signals for retest using current API prices
@@ -313,8 +352,8 @@ def _scan(engine, api, top_n, universe=None, orb_only=False):
         if stats['pending_count']:
             print(f'  [Pullback] {stats["pending_count"]} pending: {", ".join(stats["pending_symbols"][:5])}')
 
-        # ORB signals fire IMMEDIATELY (no retest needed) + pullback-fired signals
-        sigs = orb_signals + fired
+        # ORB + VOL signals fire IMMEDIATELY (no retest needed) + pullback-fired signals
+        sigs = bypass_pullback + fired
     except Exception as e:
         log.warning(f"[Pullback] failed: {e} — falling back to direct entries")
         sigs = setups  # includes ORB signals already if any
@@ -494,6 +533,9 @@ def main():
     parser.add_argument('--orb-only', action='store_true',
                         help='ORB-only mode: disable pattern voting, trade only '
                              'Opening Range Breakouts (9:45-12:00 IST).')
+    parser.add_argument('--vol-only', action='store_true',
+                        help='Volatility-only mode: trade compression -> expansion '
+                             'straddles/strangles (9:45-11:30 IST).')
     parser.add_argument('--no-eod', action='store_true',
                         help='Skip the post-market EOD learning batch on close.')
     args = parser.parse_args()
@@ -550,7 +592,8 @@ def main():
                 break
             continue
 
-        _scan(engine, api, args.top, universe=universe, orb_only=args.orb_only)
+        _scan(engine, api, args.top, universe=universe,
+              orb_only=args.orb_only, vol_only=args.vol_only)
 
         for _ in range(SCAN_INTERVAL_SEC):
             if not _running:
