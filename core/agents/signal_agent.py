@@ -436,6 +436,35 @@ class SignalAgent(BaseAgent):
             except Exception as e:
                 log.debug(f"[Signal] momentum profiler err {sym}: {e}")
 
+            # ── Per-stock breakout profile scoring ────────────────────────
+            # Check if current indicators match this stock's historical
+            # breakout fingerprint (RSI range, EMA state, volume, supertrend).
+            try:
+                from core.breakout_study import score_current_vs_profile
+                pats = signal.patterns or []
+                bp_result = score_current_vs_profile(
+                    sym, signal.direction,
+                    rsi=signal.rsi,
+                    volume_ratio=signal.volume_ratio,
+                    ema9_above_21=(signal.ema9 > signal.ema21),
+                    supertrend_up=("supertrend_up" in pats),
+                    above_vwap=(signal.entry_price > signal.vwap if signal.vwap > 0 else True),
+                )
+                if bp_result is not None:
+                    ms = bp_result["match_score"]
+                    if ms >= 0.7:
+                        bonus = int((ms - 0.5) * 30)  # up to +15
+                        effective_strength += bonus
+                        log.info(f"[Signal] {sym}: breakout profile MATCH "
+                                 f"{ms:.0%} str+={bonus} | {bp_result['checks']}")
+                    elif ms < 0.3:
+                        penalty = int((0.5 - ms) * 30)  # up to -15
+                        effective_strength = max(effective_strength - penalty, 0)
+                        log.info(f"[Signal] {sym}: breakout profile MISMATCH "
+                                 f"{ms:.0%} str-={penalty} | {bp_result['checks']}")
+            except Exception as e:
+                log.debug(f"[Signal] breakout profile err {sym}: {e}")
+
             # Store signal for downstream agents
             with self.state._lock:
                 self.state.signals[sym] = signal

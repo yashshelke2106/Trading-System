@@ -140,6 +140,26 @@ def _scan(engine, api, top_n, universe=None):
                         s["patterns"] = s["patterns_combined"]
                         s["reason"] = f'{s.get("reason","")} | OI:{oi.get("quadrant")}'
 
+                # Breakout profile match: score current vs stock's historical fingerprint
+                try:
+                    from core.breakout_study import score_current_vs_profile
+                    pats = s.get("patterns_combined") or s.get("patterns") or []
+                    if isinstance(pats, str):
+                        pats = [p.strip() for p in pats.split(",")]
+                    bp = score_current_vs_profile(
+                        s["symbol"], s["direction"],
+                        rsi=float(s.get("rsi", 50) or 50),
+                        volume_ratio=float(s.get("volume_ratio", 1) or 1),
+                        ema9_above_21=("ema_uptrend" in pats or "ema_bullish_cross" in pats),
+                        supertrend_up=("supertrend_up" in pats),
+                        above_vwap=("above_vwap" in pats),
+                    )
+                    if bp:
+                        s["bp_match"] = bp["match_score"]
+                        s["bp_checks"] = bp["checks"]
+                except Exception:
+                    pass
+
                 enriched.append(s)
                 try:
                     record_signal(s)
@@ -179,19 +199,21 @@ def _scan(engine, api, top_n, universe=None):
     print(f'  Grade S={s_ct}  A={a}  B={b}  C={c}  total={len(sigs)}')
     top = sigs[:top_n]
     if top:
-        print(f'  {"Symbol":<14} {"Dir":<6} {"Grd":<4} {"Score":>5} {"Entry":>9} {"SL":>9} {"MC":>6}  Reason')
-        print('  ' + '-' * 82)
+        print(f'  {"Symbol":<14} {"Dir":<6} {"Grd":<4} {"Score":>5} {"Entry":>9} {"SL":>9} {"MC":>6} {"BP":>4}  Reason')
+        print('  ' + '-' * 88)
         for s in top:
             grade = s["confluence_grade"]
             prefix = '* ' if grade == 'S' else '  '
             mc_edge = s.get("mc_edge")
             mc_str = f'{mc_edge:+.2f}' if mc_edge is not None else '  n/a'
+            bp = s.get("bp_match")
+            bp_str = f'{bp:.0%}' if bp is not None else 'n/a'
             line = (
                 f'{prefix}{s["symbol"]:<14} {s["direction"].upper():<6} '
                 f'{grade:<4} {s["confluence_score"]:>5} '
                 f'{s["entry_price"]:>9.2f} {s["sl_price"]:>9.2f} '
-                f'{mc_str:>6}  '
-                f'{s["reason"][:44]}'
+                f'{mc_str:>6} {bp_str:>4}  '
+                f'{s["reason"][:40]}'
             )
             if grade == 'S':
                 line += ' [~75-80% WR T1]'
