@@ -30,7 +30,7 @@ from core.nse_option_chain import validate_fno_universe
 
 _scan_count = 0
 
-SCAN_INTERVAL_SEC = 30
+SCAN_INTERVAL_SEC = 15  # was 30 — halve latency for faster entry detection
 _OPEN  = (9, 15)
 _CLOSE = (15, 30)
 _running = True
@@ -151,6 +151,44 @@ def _scan(engine, api, top_n, universe=None):
                 except Exception:
                     pass
 
+                # Pattern quality scoring: each pattern has different predictive power.
+                # Replaces binary "3+ votes = signal" with weighted quality combo.
+                try:
+                    from core.pattern_quality import compute_signal_quality
+                    pq = compute_signal_quality(s)
+                    if pq["score_adj"] != 0:
+                        s["confluence_score"] = int(float(s.get("confluence_score", 0) or 0)) + pq["score_adj"]
+                        s["pattern_quality"] = pq["quality"]
+                        s["quality_verdict"] = pq["verdict"]
+                        s["reason"] = f'{s.get("reason","")} | PQ:{pq["verdict"]}({pq["quality"]:.2f})'
+                except Exception:
+                    pass
+
+                # Smart money proxy: institutional alignment score (L2 substitute)
+                try:
+                    from core.smart_money_proxy import institutional_alignment_score
+                    # Need 5m df to compute — skip if not available, signal already enriched
+                    sm = institutional_alignment_score(s, df_5m=None)
+                    if sm["score"] < 40:
+                        # Skip — institutional flow against trade
+                        dropped_no_chain.append(s["symbol"] + f"(smartmoney:{sm['score']})")
+                        continue
+                    s["smart_money_score"] = sm["score"]
+                    s["reason"] = f'{s.get("reason","")} | SM:{sm["score"]}'
+                except Exception:
+                    pass
+
+                # Entry guard: block known bias modes (dead vol, RSI extremes, VWAP, etc.)
+                # Setup-matched signals bypass.
+                try:
+                    from core.entry_guard import check_entry
+                    ok, reason = check_entry(s)
+                    if not ok:
+                        dropped_no_chain.append(s["symbol"] + f"(guard:{reason})")
+                        continue  # KILL signal
+                except Exception:
+                    pass
+
                 # Breakout profile match: score current vs stock's historical fingerprint
                 try:
                     from core.breakout_study import score_current_vs_profile
@@ -218,6 +256,16 @@ def _scan(engine, api, top_n, universe=None):
         except Exception as e:
             log.debug(f"MC batch failed: {e}")
 
+    # Grade-based position sizing + setup boost
+    GRADE_SIZE = {"S": 1.0, "A": 0.75, "B": 0.5, "C": 0.3}
+    for s in sigs:
+        grade = s.get("confluence_grade", "C")
+        size_mult = GRADE_SIZE.get(grade, 0.5)
+        # Setup-matched signals get full size regardless of grade
+        if s.get("setup_type") in ("mega_winner", "high_wr"):
+            size_mult = min(size_mult * 1.5, 1.0)
+        s["size_mult"] = round(size_mult, 2)
+
     # Write enriched signals (option fields now present for UI)
     write_signals(sigs, meta={"elapsed_sec": elapsed, "universe_size": len(universe)})
 
@@ -268,6 +316,14 @@ def _scan(engine, api, top_n, universe=None):
                 n_setups = refresh_from_journal()
                 if n_setups:
                     print(f'  [Setups] refreshed: {n_setups} auto-mined combos')
+            except Exception:
+                pass
+            # Refresh pattern quality weights from journal
+            try:
+                from core.pattern_quality import refresh_from_journal as refresh_pq
+                n_pq = refresh_pq()
+                if n_pq:
+                    print(f'  [PatternQ] refreshed: {n_pq} pattern qualities')
             except Exception:
                 pass
             # Reload learned params into running SignalEngine immediately — closes feedback loop

@@ -295,7 +295,10 @@ def check_outcomes(lot_sizes: Dict[str, int] = None) -> Tuple[int, int, int]:
         sym = sig["symbol"]
         direction = sig.get("direction", "long").lower()
         ts_str = sig.get("ts", "")
-        lot = lot_sizes.get(sym, 1)
+        base_lot = lot_sizes.get(sym, 1)
+        # Grade-based position sizing: size_mult from signal enrichment
+        size_mult = float(sig.get("size_mult", 1.0) or 1.0)
+        lot = max(1, int(base_lot * size_mult))
 
         try:
             sig_age_h = (now - datetime.fromisoformat(ts_str)).total_seconds() / 3600.0

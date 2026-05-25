@@ -22,7 +22,9 @@ What it does
 from __future__ import annotations
 
 import logging
-from typing import Dict, List
+from collections import defaultdict
+from datetime import datetime
+from typing import Dict, List, Optional
 
 log = logging.getLogger(__name__)
 
@@ -30,6 +32,65 @@ SELECTIVE_FIRE      = True
 MIN_EXPECTANCY_R    = 0.15   # need p·rr − (1−p) ≥ this (positive w/ margin)
 SELECTIVE_FIRE_KEEP = 12     # hard cap per scan (sniper, not spray)
 MIN_VOLUME_RATIO    = 0.70   # vol < 0.7x avg = dead tape, skip
+
+# ── Hour-based filter (Bug #4) ─────────────────────────────────────────
+# Journal data: Hour 12 = 15% WR (death zone). Hour 14 = 23%.
+# Hours 09-11 and 13 are 30%+ WR.
+DEATH_HOURS = {12, 14}       # hard-block these hours (setup-matched exempt)
+WEAK_HOURS  = {15}            # penalty only, not kill (last 30min)
+
+# ── Sector correlation cap (Bug #8) ────────────────────────────────────
+# Max signals from same sector per scan. Prevents correlated blowups.
+MAX_PER_SECTOR = 2
+SECTOR_MAP = {
+    # Banks
+    "AXISBANK": "bank", "BANDHANBNK": "bank", "BANKBARODA": "bank",
+    "CANBK": "bank", "HDFCBANK": "bank", "ICICIBANK": "bank",
+    "IDFCFIRSTB": "bank", "INDUSINDBK": "bank", "KOTAKBANK": "bank",
+    "PNB": "bank", "SBIN": "bank", "FEDERALBNK": "bank",
+    "AUBANK": "bank", "MANAPPURAM": "nbfc", "BAJFINANCE": "nbfc",
+    "BAJAJFINSV": "nbfc", "CHOLAFIN": "nbfc", "MUTHOOTFIN": "nbfc",
+    "PFC": "nbfc", "RECLTD": "nbfc", "SHRIRAMFIN": "nbfc",
+    "LICHSGFIN": "nbfc", "JIOFIN": "nbfc",
+    # IT
+    "INFY": "it", "TCS": "it", "WIPRO": "it", "HCLTECH": "it",
+    "TECHM": "it", "LTIM": "it", "PERSISTENT": "it", "COFORGE": "it",
+    "MPHASIS": "it", "TATAELXSI": "it", "OFSS": "it", "NAUKRI": "it",
+    # Auto
+    "MARUTI": "auto", "TATAMOTORS": "auto", "M&M": "auto",
+    "BAJAJ-AUTO": "auto", "HEROMOTOCO": "auto", "EICHERMOT": "auto",
+    "ASHOKLEY": "auto", "ESCORTS": "auto", "MOTHERSON": "auto",
+    "APOLLOTYRE": "auto", "MRF": "auto", "BALKRISIND": "auto",
+    "BHARATFORG": "auto",
+    # Pharma
+    "SUNPHARMA": "pharma", "DRREDDY": "pharma", "CIPLA": "pharma",
+    "DIVISLAB": "pharma", "LUPIN": "pharma", "AUROPHARMA": "pharma",
+    "BIOCON": "pharma", "ALKEM": "pharma", "LAURUSLABS": "pharma",
+    "TORNTPHARM": "pharma",
+    # Metal
+    "TATASTEEL": "metal", "JSWSTEEL": "metal", "HINDALCO": "metal",
+    "VEDL": "metal", "NATIONALUM": "metal", "SAIL": "metal",
+    "NMDC": "metal", "COALINDIA": "metal",
+    # Oil & Gas
+    "RELIANCE": "oilgas", "ONGC": "oilgas", "BPCL": "oilgas",
+    "IOC": "oilgas", "GAIL": "oilgas", "PETRONET": "oilgas",
+    "GUJGASLTD": "oilgas", "IGL": "oilgas",
+    # FMCG
+    "HINDUNILVR": "fmcg", "ITC": "fmcg", "BRITANNIA": "fmcg",
+    "NESTLEIND": "fmcg", "TATACONSUM": "fmcg", "DABUR": "fmcg",
+    "MARICO": "fmcg", "COLPAL": "fmcg", "GODREJCP": "fmcg",
+    # Infra/Cement
+    "ULTRACEMCO": "infra", "SHREECEM": "infra", "AMBUJACEM": "infra",
+    "ACC": "infra", "RAMCOCEM": "infra", "GRASIM": "infra",
+    "DLF": "infra", "GODREJPROP": "infra", "OBEROIRLTY": "infra",
+    "NCC": "infra", "LT": "infra",
+    # Adani group
+    "ADANIENT": "adani", "ADANIPORTS": "adani", "ADANIGREEN": "adani",
+    "ADANIPOWER": "adani",
+    # Power/Utilities
+    "NTPC": "power", "POWERGRID": "power", "TATAPOWER": "power",
+    "INDUSTOWER": "power",
+}
 
 # Pattern conflict sets — if signal has patterns from OPPOSING set, block.
 # Empirical: all 3 SL_HITs this week had opposing HTF patterns.
@@ -55,15 +116,122 @@ def _has_pattern_conflict(signal: Dict) -> bool:
     return False
 
 
+def _get_market_regime() -> str:
+    """Detect current market regime from NIFTY 50 data.
+
+    Returns: "trending_up" | "trending_down" | "choppy" | "unknown"
+
+    Uses NIFTY daily EMA9 vs EMA21 + recent ADX-like volatility measure.
+    Trend-following signals in chop = losses. Regime filter blocks them.
+    """
+    try:
+        import yfinance as yf
+        import numpy as np
+        nifty = yf.Ticker("^NSEI")
+        df = nifty.history(period="30d", interval="1d", auto_adjust=True)
+        if df is None or len(df) < 21:
+            return "unknown"
+
+        close = df["Close"].values
+        # EMA9 vs EMA21
+        ema9 = _ema(close, 9)
+        ema21 = _ema(close, 21)
+
+        # Recent direction: last 5 bars trend
+        recent_change = (close[-1] - close[-5]) / close[-5] * 100
+
+        # Range-bound detection: if 5-day range < 2% = chop
+        hi5 = max(close[-5:])
+        lo5 = min(close[-5:])
+        range_pct = (hi5 - lo5) / lo5 * 100
+
+        if range_pct < 1.5:
+            return "choppy"
+        elif ema9 > ema21 and recent_change > 0.5:
+            return "trending_up"
+        elif ema9 < ema21 and recent_change < -0.5:
+            return "trending_down"
+        elif range_pct < 3.0:
+            return "choppy"
+        else:
+            return "trending_up" if ema9 > ema21 else "trending_down"
+    except Exception as e:
+        log.debug(f"[Regime] detection failed: {e}")
+        return "unknown"
+
+
+def _ema(data, period: int):
+    """Simple EMA calculation."""
+    import numpy as np
+    multiplier = 2 / (period + 1)
+    ema = [float(data[0])]
+    for price in data[1:]:
+        ema.append((float(price) - ema[-1]) * multiplier + ema[-1])
+    return ema[-1]
+
+
+# Cache regime for the scan cycle (don't re-fetch NIFTY per signal)
+_regime_cache: Dict = {"regime": "unknown", "ts": 0.0}
+_REGIME_TTL = 300  # 5 minutes
+
+
+def _get_cached_regime() -> str:
+    """Get market regime with 5-minute cache."""
+    import time
+    now = time.time()
+    if now - _regime_cache["ts"] > _REGIME_TTL:
+        _regime_cache["regime"] = _get_market_regime()
+        _regime_cache["ts"] = now
+        log.info(f"[Regime] detected: {_regime_cache['regime']}")
+    return _regime_cache["regime"]
+
+
 def finalize_and_select(signals: List[Dict]) -> List[Dict]:
     """Calibrate + expectancy-gate a list of enriched signal dicts."""
     if not signals:
         return signals
 
-    # Pre-filter: pattern conflict + volume floor
+    # Detect market regime once per scan
+    regime = _get_cached_regime()
+
+    # Pre-filter: pattern conflict + volume floor + hour block + regime
     pre_count = len(signals)
     filtered = []
+    hour_blocked = 0
+    regime_blocked = 0
+    now_hour = datetime.now().hour
+
     for s in signals:
+        is_setup = bool(s.get("setup_name") and
+                        s.get("setup_type") in ("mega_winner", "high_wr"))
+
+        # Hour block: death hours (12, 14) unless setup-matched
+        if now_hour in DEATH_HOURS and not is_setup:
+            hour_blocked += 1
+            continue
+
+        # Regime filter: block trend signals in chop, block counter-trend in trends
+        if regime == "choppy" and not is_setup:
+            # In chop, only allow signals with strong volume (breakout potential)
+            vol = float(s.get("volume_ratio", 0) or s.get("vol_ratio", 0) or 0)
+            if vol < 1.5:
+                regime_blocked += 1
+                continue
+        elif regime == "trending_up":
+            # In uptrend, penalize shorts (don't kill — shorts at resistance still valid)
+            if s.get("direction") == "short" and not is_setup:
+                try:
+                    s["confluence_score"] = int(float(s.get("confluence_score", 0) or 0)) - 15
+                except (ValueError, TypeError):
+                    pass
+        elif regime == "trending_down":
+            # In downtrend, penalize longs
+            if s.get("direction") == "long" and not is_setup:
+                try:
+                    s["confluence_score"] = int(float(s.get("confluence_score", 0) or 0)) - 15
+                except (ValueError, TypeError):
+                    pass
+
         # Pattern conflict: 2+ opposing HTF patterns = strong SL predictor
         if _has_pattern_conflict(s):
             continue
@@ -78,9 +246,14 @@ def finalize_and_select(signals: List[Dict]) -> List[Dict]:
             except (ValueError, TypeError):
                 pass
         filtered.append(s)
+
+    if hour_blocked:
+        log.info(f"[HourBlock] {hour_blocked} signals blocked (death hour {now_hour})")
+    if regime_blocked:
+        log.info(f"[Regime] {regime_blocked} signals blocked in {regime} regime")
     if pre_count > len(filtered):
         log.info(f"[PreFilter] {pre_count} -> {len(filtered)} "
-                 f"(conflict/vol dropped {pre_count - len(filtered)})")
+                 f"(conflict/vol/hour/regime dropped {pre_count - len(filtered)})")
     signals = filtered
 
     try:
@@ -129,10 +302,31 @@ def finalize_and_select(signals: List[Dict]) -> List[Dict]:
 
     for s, e in kept:
         s["reason"] = f"{s.get('reason','')} | E={e:+.2f}R p={s['calibrated_prob']:.0%}"
+        s["regime"] = regime
     kept.sort(key=lambda t: t[1], reverse=True)
-    out = [s for s, _ in kept[:SELECTIVE_FIRE_KEEP]]
+
+    # Sector correlation cap: max MAX_PER_SECTOR signals from same sector
+    sector_count: Dict[str, int] = defaultdict(int)
+    sector_capped = []
+    sector_dropped = 0
+    for s, e in kept[:SELECTIVE_FIRE_KEEP * 2]:  # scan wider, then cap
+        sym = s.get("symbol", "")
+        sector = SECTOR_MAP.get(sym, sym)  # unmapped = own sector
+        if sector_count[sector] >= MAX_PER_SECTOR:
+            sector_dropped += 1
+            log.info(f"[SectorCap] {sym} dropped (sector={sector}, "
+                     f"already {MAX_PER_SECTOR} from same sector)")
+            continue
+        sector_count[sector] += 1
+        sector_capped.append(s)
+        if len(sector_capped) >= SELECTIVE_FIRE_KEEP:
+            break
+
+    out = sector_capped
+    if sector_dropped:
+        log.info(f"[SectorCap] {sector_dropped} signals capped by sector limit")
     if setup_bypass:
         log.info(f"[Finalize] {setup_bypass} setup-matched signals bypassed expectancy gate")
-    log.info(f"[Finalize] {len(signals)} candidates → {len(out)} fired "
-             f"(expectancy ≥ {MIN_EXPECTANCY_R}R)")
+    log.info(f"[Finalize] {len(signals)} candidates -> {len(out)} fired "
+             f"(expectancy >= {MIN_EXPECTANCY_R}R, regime={regime})")
     return out
