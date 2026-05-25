@@ -713,19 +713,21 @@ class TimeframeSyncEngine:
         W_VWAP          = int(_sw.get("score_vwap_align",     5))
 
         # ── Extreme-RSI guard ─────────────────────────────────────────────
-        # Block shorts at EXTREME oversold (< rsi_short_floor) — bounce risk.
-        # Block longs at EXTREME overbought (> 80) — reversal risk.
-        # NOT symmetric: RSI 70-80 is momentum zone for longs, not a kill zone.
+        # Penalty instead of hard kill — let scoring decide.
+        # Hard return None starved shorts: RSI 25-30 CAN be valid short if
+        # trend is strong (lower lows). Penalty lets strong setups survive.
         try:
             _rsi_sf = float(_sw.get("rsi_short_floor")
                             or get_learned_config().get("SIGNAL_CONFIG", {}).get("rsi_short_floor", 30))
         except Exception:
             _rsi_sf = 30.0
-        _rsi_lc = 80.0  # only kill longs at extreme overbought, not at 70
+        _rsi_lc = 80.0
         if not lng and s5.rsi < _rsi_sf:
-            return None
+            score -= 25  # heavy penalty but not kill — bounce risk
+            reasons.append(f"rsi_extreme_low({s5.rsi:.0f})")
         if lng and s5.rsi > _rsi_lc:
-            return None
+            score -= 25  # heavy penalty — reversal risk
+            reasons.append(f"rsi_extreme_high({s5.rsi:.0f})")
 
         # ── Daily structural breakout (NEW — real breakout, not just candle) ──
         daily_breakout = False

@@ -140,6 +140,17 @@ def _scan(engine, api, top_n, universe=None):
                         s["patterns"] = s["patterns_combined"]
                         s["reason"] = f'{s.get("reason","")} | OI:{oi.get("quadrant")}'
 
+                # Theta decay penalty: penalize signals with high theta bleed
+                try:
+                    from core.theta_decay import theta_score_penalty
+                    theta_pen = theta_score_penalty(s)
+                    if theta_pen != 0:
+                        s["confluence_score"] = int(float(s.get("confluence_score", 0) or 0)) + theta_pen
+                        s["theta_penalty"] = theta_pen
+                        s["reason"] = f'{s.get("reason","")} | θ={theta_pen:+d}'
+                except Exception:
+                    pass
+
                 # Breakout profile match: score current vs stock's historical fingerprint
                 try:
                     from core.breakout_study import score_current_vs_profile

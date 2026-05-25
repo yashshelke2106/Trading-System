@@ -428,7 +428,35 @@ def check_outcomes(lot_sizes: Dict[str, int] = None) -> Tuple[int, int, int]:
                 _spot_extra = {"spot_outcome": _s_oc,
                                "spot_pnl_pct": round(_spot_pnl, 2)}
 
-            if target_prem > 0 and current_prem >= target_prem:
+            # ── Premium-based exit: theta-aware, time-decaying ──────────
+            # Check premium exit BEFORE spot-based checks. Premium is truth
+            # for option buyer — spot can be on target but theta killed premium.
+            _prem_exit_oc = None
+            try:
+                from core.theta_decay import premium_exit_check
+                _prem_exit_oc, _prem_reason = premium_exit_check(
+                    entry_prem_f, current_prem, sig_age_h,
+                    target_prem=target_prem, sl_prem=sl_prem_level)
+            except Exception:
+                _prem_exit_oc = None
+
+            if _prem_exit_oc is not None:
+                net = _apply_fill_costs(entry_prem_f, current_prem, sig_age_h,
+                                        spread_rt=_srt, theta_per_h=_tph)
+                oc = _prem_exit_oc if net > entry_prem_f else "SL_HIT"
+                _spot_extra["exit_trigger"] = f"premium:{_prem_reason}"
+                resolve_signal(sig["signal_id"], oc,
+                               option_strike, lot_size=lot, exit_prem=net,
+                               extra=_spot_extra)
+                _write_paper_trade(sig, oc,
+                                   option_strike, lot, exit_prem=net)
+                if oc == "TARGET_HIT":
+                    target_hits += 1
+                else:
+                    sl_hits += 1
+                log.info(f"[Tracker] PREM_EXIT {oc} {sym} {option_type} "
+                         f"prem={current_prem:.2f} net={net:.2f} ({_prem_reason})")
+            elif target_prem > 0 and current_prem >= target_prem:
                 net = _apply_fill_costs(entry_prem_f, target_prem, sig_age_h,
                                         spread_rt=_srt, theta_per_h=_tph)
                 # Honest: if spread+theta ate the whole edge it's not a win.

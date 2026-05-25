@@ -66,7 +66,7 @@ TUNABLE_PARAMS: Dict[str, Tuple[float, float, float, float, str]] = {
     # Capped at 50: top movers often have moderate strength scores. Multi-TF enforces quality.
     "min_strength":           (35,   25,   50,   5,    "SIGNAL_CONFIG"),
     "atr_multiplier":         (1.5,  1.0,  3.0,  0.25, "SIGNAL_CONFIG"),
-    "entry_min_vol_ratio":    (2.0,  1.5,  4.0,  0.25, "VOLUME_EXIT_CONFIG"),
+    "entry_min_vol_ratio":    (2.0,  1.5,  2.5,  0.25, "VOLUME_EXIT_CONFIG"),
     # Time filters — MetaLearning can adjust based on hour WR data
     "block_after_hour":       (12,   11,   14,   1,    "SIGNAL_CONFIG"),
     "skip_first_minutes":     (15,   10,   30,   5,    "SIGNAL_CONFIG"),

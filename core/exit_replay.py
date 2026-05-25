@@ -183,6 +183,22 @@ def replay_exit(signal: Dict) -> Dict:
     exit_reason = "time_exit_window_closed"
     bars_to_hit: Optional[int] = None
 
+    # Premium-aware exit: project premium at each bar using delta+theta
+    _entry_prem = float(signal.get("entry_prem") or 0)
+    _target_prem = float(signal.get("target_prem") or 0)
+    _sl_prem = float(signal.get("sl_prem") or 0)
+    _delta = float(signal.get("delta") or 0)
+    _theta = float(signal.get("theta") or 0)
+    _option_type = signal.get("option_type", "CE")
+    _has_option = _entry_prem > 0 and abs(_delta) > 0
+
+    # Determine bar duration for theta projection
+    try:
+        _bar_size = _get_mode().replay_bar
+    except Exception:
+        _bar_size = "5m"
+    _hours_per_bar = 24.0 if _bar_size == "1d" else 5.0 / 60.0
+
     for i, row in df.iterrows():
         hi = float(row['high'])
         lo = float(row['low'])
@@ -224,6 +240,31 @@ def replay_exit(signal: Dict) -> Dict:
                 exit_reason = "sl_hit"
                 bars_to_hit = int(i)
                 break
+        # Premium-aware exit: project premium at this bar, check decay thresholds
+        if _has_option and outcome == "TIME_EXIT":
+            try:
+                _hours_held = (int(i) + 1) * _hours_per_bar
+                # Project premium: entry + delta*spot_move - theta*time
+                if _option_type == "CE":
+                    _spot_move = cl - entry
+                else:
+                    _spot_move = entry - cl
+                _proj_prem = _entry_prem + abs(_delta) * _spot_move - abs(_theta) * (_hours_held / 24.0)
+                _proj_prem = max(_proj_prem, _entry_prem * 0.05)
+
+                from core.theta_decay import premium_exit_check
+                _prem_oc, _prem_reason = premium_exit_check(
+                    _entry_prem, _proj_prem, _hours_held,
+                    target_prem=_target_prem, sl_prem=_sl_prem)
+                if _prem_oc is not None:
+                    exit_price = cl
+                    outcome = _prem_oc
+                    exit_reason = f"premium:{_prem_reason}"
+                    bars_to_hit = int(i)
+                    break
+            except Exception:
+                pass
+
         # Track running close as potential time exit
         exit_price = cl
 
