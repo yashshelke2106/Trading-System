@@ -241,7 +241,44 @@ def _scan(engine, api, top_n, universe=None):
         print(f'  Dropped {len(dropped_no_chain)} non-F&O/bad-chain: {", ".join(dropped_no_chain[:10])}')
     # Single authoritative gate: calibrate OI-adjusted score → P(win),
     # keep only positive-expectancy signals, rank best-edge-first, cap.
-    sigs = finalize_and_select(enriched)
+    setups = finalize_and_select(enriched)
+
+    # ── PULLBACK ENTRY: setups go to pending queue, NOT fired immediately ──
+    # Detected breakouts wait for retest before becoming entries.
+    # Eliminates chase entries that cost 5/6 trades today.
+    pullback_enabled = True
+    try:
+        from core.pullback_entry import get_queue
+        queue = get_queue()
+        # Step 1: add new setups to pending queue
+        for s in setups:
+            queue.add(s)
+
+        # Step 2: check pending signals for retest using current API prices
+        def _price_lookup(sym: str):
+            try:
+                df = api.get_intraday_data(sym, interval=5, days_back=1)
+                if df is None or df.empty:
+                    return 0, None
+                cur = float(df['close'].iloc[-1])
+                recent = df.tail(3).to_dict('records')
+                return cur, recent
+            except Exception:
+                return 0, None
+
+        fired = queue.check_all(_price_lookup)
+        if fired:
+            print(f'  [Pullback] {len(fired)} signals FIRED on retest')
+        stats = queue.stats()
+        if stats['pending_count']:
+            print(f'  [Pullback] {stats["pending_count"]} pending: {", ".join(stats["pending_symbols"][:5])}')
+
+        # FIRED signals go through, raw setups don't (they wait)
+        sigs = fired
+    except Exception as e:
+        log.warning(f"[Pullback] failed: {e} — falling back to direct entries")
+        sigs = setups
+        pullback_enabled = False
 
     # Monte Carlo simulation: enrich signals with probability estimates
     if sigs:
