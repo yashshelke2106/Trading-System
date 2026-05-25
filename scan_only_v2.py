@@ -171,6 +171,24 @@ def _scan(engine, api, top_n, universe=None):
                 except Exception:
                     pass
 
+                # Setup detection: "Is this THE setup?"
+                # Checks for known high-WR pattern combos and loss magnets.
+                try:
+                    from core.setup_detector import detect_setup
+                    setup = detect_setup(s)
+                    if setup:
+                        if setup["is_loss_magnet"]:
+                            dropped_no_chain.append(s["symbol"] + f"(lossmag:{setup['setup_name']})")
+                            continue  # KILL — 0% WR combo
+                        s["setup_name"] = setup["setup_name"]
+                        s["setup_type"] = setup["setup_type"]
+                        s["setup_wr"] = setup["win_rate"]
+                        s["confluence_score"] = int(float(s.get("confluence_score", 0) or 0)) \
+                            + setup["score_boost"]
+                        s["reason"] = f'{s.get("reason","")} | SETUP:{setup["setup_name"]}({setup["win_rate"]:.0%})'
+                except Exception:
+                    pass
+
                 enriched.append(s)
                 try:
                     record_signal(s)
@@ -228,6 +246,9 @@ def _scan(engine, api, top_n, universe=None):
             )
             if grade == 'S':
                 line += ' [~75-80% WR T1]'
+            setup_name = s.get("setup_name")
+            if setup_name:
+                line += f' *** SETUP:{setup_name} WR={s.get("setup_wr",0):.0%}'
             print(line)
     else:
         print('  No signals above threshold.')
@@ -241,6 +262,14 @@ def _scan(engine, api, top_n, universe=None):
             changes = get_learner().maybe_update()
             if changes:
                 print(f'  [Learner] {len(changes)} param(s) updated: {", ".join(changes.keys())}')
+            # Refresh setup detector combos from latest journal data
+            try:
+                from core.setup_detector import refresh_from_journal
+                n_setups = refresh_from_journal()
+                if n_setups:
+                    print(f'  [Setups] refreshed: {n_setups} auto-mined combos')
+            except Exception:
+                pass
             # Reload learned params into running SignalEngine immediately — closes feedback loop
             engine.engine.reload_learned_params()
             lp = get_learner().get_learned_params()

@@ -116,11 +116,23 @@ def finalize_and_select(signals: List[Dict]) -> List[Dict]:
     if not SELECTIVE_FIRE:
         return [s for s, _ in scored]
 
-    kept = [(s, e) for s, e in scored if e >= MIN_EXPECTANCY_R]
+    kept = []
+    setup_bypass = 0
+    for s, e in scored:
+        # Setup-matched signals bypass expectancy gate — the combo IS the edge
+        if s.get("setup_name") and s.get("setup_type") in ("mega_winner", "high_wr"):
+            kept.append((s, max(e, 1.0)))  # force positive expectancy
+            setup_bypass += 1
+            continue
+        if e >= MIN_EXPECTANCY_R:
+            kept.append((s, e))
+
     for s, e in kept:
         s["reason"] = f"{s.get('reason','')} | E={e:+.2f}R p={s['calibrated_prob']:.0%}"
     kept.sort(key=lambda t: t[1], reverse=True)
     out = [s for s, _ in kept[:SELECTIVE_FIRE_KEEP]]
+    if setup_bypass:
+        log.info(f"[Finalize] {setup_bypass} setup-matched signals bypassed expectancy gate")
     log.info(f"[Finalize] {len(signals)} candidates → {len(out)} fired "
              f"(expectancy ≥ {MIN_EXPECTANCY_R}R)")
     return out
