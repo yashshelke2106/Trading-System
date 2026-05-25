@@ -48,13 +48,50 @@ def _market_open():
     return (_OPEN[0]*60 + _OPEN[1]) <= cur <= (_CLOSE[0]*60 + _CLOSE[1])
 
 
-def _scan(engine, api, top_n, universe=None):
+def _scan(engine, api, top_n, universe=None, orb_only=False):
     global _scan_count
     universe = universe or FO_UNIVERSE
     ts = datetime.now().strftime('%H:%M:%S')
     t0 = datetime.now()
-    print(f'[{ts}] Scanning {len(universe)} symbols (1D+15m+5m confluence)...')
-    sigs = engine.scan_universe(api, universe)
+
+    # ── ORB STRATEGY (runs alongside or instead of pattern voting) ──
+    orb_sigs = []
+    try:
+        from core.orb_strategy import detect_orb_signal, is_orb_window_active
+        active, phase = is_orb_window_active()
+        if active:
+            print(f'[{ts}] ORB window ACTIVE (phase={phase}) - scanning {len(universe)} symbols')
+            for sym in universe:
+                try:
+                    df = api.get_intraday_data(sym, interval=5, days_back=1)
+                    if df is None or df.empty:
+                        continue
+                    orb_sig = detect_orb_signal(sym, df)
+                    if orb_sig:
+                        orb_sigs.append(orb_sig)
+                except Exception:
+                    continue
+            if orb_sigs:
+                print(f'  [ORB] {len(orb_sigs)} breakouts detected: '
+                      f'{", ".join(s["symbol"] + ":" + s["direction"][:1].upper() for s in orb_sigs[:5])}')
+        else:
+            print(f'[{ts}] ORB window NOT active (phase={phase})')
+    except Exception as e:
+        log.debug(f"ORB detection failed: {e}")
+
+    if orb_only:
+        sigs = orb_sigs
+        print(f'  [ORB-ONLY] {len(sigs)} signals (pattern voting disabled)')
+    else:
+        print(f'[{ts}] Scanning {len(universe)} symbols (1D+15m+5m confluence)...')
+        sigs = engine.scan_universe(api, universe)
+        # Merge ORB signals — for symbols where ORB fired, prefer ORB over pattern signal
+        if orb_sigs:
+            orb_syms = {s["symbol"] for s in orb_sigs}
+            sigs = [s for s in sigs if s["symbol"] not in orb_syms]
+            sigs.extend(orb_sigs)
+            print(f'  [ORB] {len(orb_sigs)} ORB signals merged into pipeline')
+
     elapsed = round((datetime.now() - t0).total_seconds(), 2)
 
     # Enrich each signal with live option chain data.
@@ -251,7 +288,10 @@ def _scan(engine, api, top_n, universe=None):
         from core.pullback_entry import get_queue
         queue = get_queue()
         # Step 1: add new setups to pending queue
-        for s in setups:
+        # EXCEPTION: ORB signals bypass pullback — range edge IS the entry level
+        orb_signals = [s for s in setups if s.get("strategy") == "ORB"]
+        non_orb = [s for s in setups if s.get("strategy") != "ORB"]
+        for s in non_orb:
             queue.add(s)
 
         # Step 2: check pending signals for retest using current API prices
@@ -273,11 +313,11 @@ def _scan(engine, api, top_n, universe=None):
         if stats['pending_count']:
             print(f'  [Pullback] {stats["pending_count"]} pending: {", ".join(stats["pending_symbols"][:5])}')
 
-        # FIRED signals go through, raw setups don't (they wait)
-        sigs = fired
+        # ORB signals fire IMMEDIATELY (no retest needed) + pullback-fired signals
+        sigs = orb_signals + fired
     except Exception as e:
         log.warning(f"[Pullback] failed: {e} — falling back to direct entries")
-        sigs = setups
+        sigs = setups  # includes ORB signals already if any
         pullback_enabled = False
 
     # Monte Carlo simulation: enrich signals with probability estimates
@@ -451,6 +491,9 @@ def main():
     parser.add_argument('--all', action='store_true',
                         help='Scan full 153 F&O universe (default: top 100 most '
                              'liquid only).')
+    parser.add_argument('--orb-only', action='store_true',
+                        help='ORB-only mode: disable pattern voting, trade only '
+                             'Opening Range Breakouts (9:45-12:00 IST).')
     parser.add_argument('--no-eod', action='store_true',
                         help='Skip the post-market EOD learning batch on close.')
     args = parser.parse_args()
@@ -507,7 +550,7 @@ def main():
                 break
             continue
 
-        _scan(engine, api, args.top, universe=universe)
+        _scan(engine, api, args.top, universe=universe, orb_only=args.orb_only)
 
         for _ in range(SCAN_INTERVAL_SEC):
             if not _running:
