@@ -72,6 +72,13 @@ class LearningAgent(BaseAgent):
             except Exception as e:
                 log.debug(f"[Learning] SymMem err: {e}")
 
+            # 2b. MomentumProfiler — per-stock indicator fingerprinting
+            try:
+                from core.momentum_profiler import record_from_journal_entry
+                record_from_journal_entry(data)
+            except Exception as e:
+                log.debug(f"[Learning] MomProf err: {e}")
+
             # 3. RegimeParams — per-regime stats
             try:
                 from core.regime_params import get_regime_params

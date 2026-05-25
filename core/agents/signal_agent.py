@@ -413,6 +413,29 @@ class SignalAgent(BaseAgent):
                 log.info(f"[Signal] {sym}: memory adj {old_str:.0f}→{effective_strength:.0f} "
                          f"(mult={mem_adj:.2f})")
 
+            # ── Per-stock momentum fingerprint scoring ────────────────────
+            # If this stock has a learned indicator fingerprint, check how
+            # well current patterns match. Boost/penalize accordingly.
+            try:
+                from core.momentum_profiler import get_momentum_profiler
+                mp = get_momentum_profiler()
+                fit_score = mp.score_signal_fit(
+                    sym, signal.direction, signal.patterns or [])
+                if fit_score is not None:
+                    # fit_score 0.0-1.0: 0.7+ = strong match, 0.3- = anti-match
+                    if fit_score >= 0.7:
+                        bonus = int((fit_score - 0.5) * 20)  # up to +10
+                        effective_strength += bonus
+                        log.info(f"[Signal] {sym}: momentum fingerprint MATCH "
+                                 f"score={fit_score:.2f} str+={bonus}")
+                    elif fit_score < 0.3:
+                        penalty = int((0.5 - fit_score) * 20)  # up to -10
+                        effective_strength = max(effective_strength - penalty, 0)
+                        log.info(f"[Signal] {sym}: momentum fingerprint MISMATCH "
+                                 f"score={fit_score:.2f} str-={penalty}")
+            except Exception as e:
+                log.debug(f"[Signal] momentum profiler err {sym}: {e}")
+
             # Store signal for downstream agents
             with self.state._lock:
                 self.state.signals[sym] = signal
