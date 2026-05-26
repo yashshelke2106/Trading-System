@@ -37,11 +37,12 @@ from core.strategy_india_swing import generate_signal_india_swing
 
 
 # ── Config ─────────────────────────────────────────────────────────────────
-HOLD_HORIZON_BARS = 15      # max swing hold (≈ 3 trading weeks)
+HOLD_HORIZON_BARS = 25      # v3: was 15, winners avg 10 bars but tail extends
 COMMISSION_RT     = 0.001   # 0.1% round trip
 SLIPPAGE_SIDE     = 0.0005  # 0.05% per fill
 WARMUP_BARS       = 60      # need history for indicators
 DEFAULT_DAYS      = 730     # 2 years lookback
+BREAKEVEN_TRAIL_R = 0.7     # v3: move SL to breakeven after price hits 0.7R favourable
 
 # Liquid F&O universe (top ~30 by typical turnover)
 DEFAULT_UNIVERSE = [
@@ -103,15 +104,26 @@ def fetch_universe(symbols: List[str], days: int = DEFAULT_DAYS) -> Dict[str, pd
 
 
 def simulate_one_signal(df: pd.DataFrame, entry_idx: int, sl: float,
-                        target: float, direction: str) -> Tuple[str, float, int]:
+                        target: float, direction: str,
+                        entry_price: float = None) -> Tuple[str, float, int]:
     """
     Walk forward from entry_idx+1. Check SL/target bar-by-bar on OHLC.
-    Returns (outcome, exit_price, holding_bars).
 
-    outcome ∈ {"TARGET", "SL", "TIME_EXIT"}
+    v3: when price has moved 0.7R in favor, move SL to breakeven (entry price).
+    Reduces -1R losses on noise after the trade was working.
+
+    Returns (outcome, exit_price, holding_bars).
+    outcome ∈ {"TARGET", "SL", "BE_STOP", "TIME_EXIT"}
     """
     n = len(df)
-    last_close = float(df['close'].iloc[entry_idx])  # fallback for time exit
+    if entry_price is None:
+        entry_price = float(df['close'].iloc[entry_idx])  # crude fallback
+    initial_risk = abs(entry_price - sl)
+    be_threshold = entry_price + BREAKEVEN_TRAIL_R * initial_risk if direction == "long" \
+                   else entry_price - BREAKEVEN_TRAIL_R * initial_risk
+    moved_to_be = False
+    last_close = float(df['close'].iloc[entry_idx])
+
     for k in range(1, HOLD_HORIZON_BARS + 1):
         i = entry_idx + k
         if i >= n:
@@ -119,16 +131,25 @@ def simulate_one_signal(df: pd.DataFrame, entry_idx: int, sl: float,
         hi = float(df['high'].iloc[i])
         lo = float(df['low'].iloc[i])
         last_close = float(df['close'].iloc[i])
+
         if direction == "long":
+            # SL hit first (intra-bar order check)
             if lo <= sl:
-                return "SL", sl, k
+                return ("BE_STOP" if moved_to_be else "SL"), sl, k
             if hi >= target:
                 return "TARGET", target, k
+            # Move SL to breakeven once price reached BE threshold
+            if not moved_to_be and hi >= be_threshold:
+                sl = entry_price
+                moved_to_be = True
         else:  # short
             if hi >= sl:
-                return "SL", sl, k
+                return ("BE_STOP" if moved_to_be else "SL"), sl, k
             if lo <= target:
                 return "TARGET", target, k
+            if not moved_to_be and lo <= be_threshold:
+                sl = entry_price
+                moved_to_be = True
     return "TIME_EXIT", last_close, HOLD_HORIZON_BARS
 
 
@@ -180,7 +201,7 @@ def run_backtest(universe_data: Dict[str, pd.DataFrame],
                 target = entry_fill - 3.0 * risk
 
             outcome, exit_raw, hold_bars = simulate_one_signal(
-                df, fill_idx, sl, target, sig.direction
+                df, fill_idx, sl, target, sig.direction, entry_price=entry_fill,
             )
             # Exit slippage applied against trader
             if sig.direction == "long":
@@ -224,11 +245,16 @@ def run_backtest(universe_data: Dict[str, pd.DataFrame],
 
     wins = [t for t in trades if t["outcome"] == "TARGET"]
     losses = [t for t in trades if t["outcome"] == "SL"]
+    be_stops = [t for t in trades if t["outcome"] == "BE_STOP"]
     times = [t for t in trades if t["outcome"] == "TIME_EXIT"]
 
+    # v3: BE_STOP counts as scratch (saved a loss). For WR, count it neither
+    # as win nor loss — it's a neutral exit.
     n_real = len(wins) + len(losses)
     wr_strict = len(wins) / max(n_real, 1) * 100
     wr_broad = len(wins) / max(len(trades), 1) * 100
+    # Adjusted WR: wins / (wins + losses, excluding BE saves)
+    wr_adj = len(wins) / max(len(wins) + len(losses), 1) * 100
 
     pnls = [t["pnl_pct"] for t in trades]
     expectancy_pct = float(np.mean(pnls))
@@ -245,8 +271,10 @@ def run_backtest(universe_data: Dict[str, pd.DataFrame],
         "total_trades": len(trades),
         "wins": len(wins),
         "losses": len(losses),
+        "be_stops": len(be_stops),
         "time_exits": len(times),
         "wr_strict_pct": round(wr_strict, 1),
+        "wr_adj_pct": round(wr_adj, 1),
         "wr_broad_pct": round(wr_broad, 1),
         "expectancy_pct": round(expectancy_pct, 2),
         "expectancy_R": round(expectancy_R, 2),
@@ -309,10 +337,12 @@ def print_report(m: Dict) -> None:
     print(f"  Total trades:    {n:>10d}")
     print(f"  Wins (TARGET):   {m['wins']:>10d}")
     print(f"  Losses (SL):     {m['losses']:>10d}")
+    print(f"  BE stops:        {m.get('be_stops', 0):>10d}  (breakeven save)")
     print(f"  Time exits:      {m['time_exits']:>10d}")
     print("-" * 60)
-    print(f"  WR strict (W/(W+L)):   {m['wr_strict_pct']:>6.1f}%   <-- accuracy")
-    print(f"  WR broad  (W/total):   {m['wr_broad_pct']:>6.1f}%")
+    print(f"  WR strict (W/(W+L)):    {m['wr_strict_pct']:>6.1f}%   <-- accuracy")
+    print(f"  WR adjusted (BE neutral): {m.get('wr_adj_pct', m['wr_strict_pct']):>6.1f}%")
+    print(f"  WR broad  (W/total):    {m['wr_broad_pct']:>6.1f}%")
     print("-" * 60)
     print(f"  Expectancy:   {m['expectancy_pct']:>+6.2f}% per trade   ({m['expectancy_R']:+.2f}R)")
     print(f"  Profit factor:{m['profit_factor']:>6.2f}   (gross win/loss)")

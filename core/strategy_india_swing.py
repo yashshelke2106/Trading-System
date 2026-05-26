@@ -57,28 +57,52 @@ EMA_SLOW              = 50
 RSI_LEN               = 14
 ATR_LEN               = 14
 
-# RSI healthy zones: trend continuation (long uptrending should be 45-75,
-# not exhausted at 80+; short downtrending should be 25-55, not deep
-# oversold at 20 where bounce risk dominates).
-RSI_LONG_MIN, RSI_LONG_MAX   = 45.0, 75.0
-RSI_SHORT_MIN, RSI_SHORT_MAX = 25.0, 55.0
+# v3 PRECISION MODE — data-driven tightening from v1 backtest analysis
+# (16W/113L = 12.4% WR on 230 trades).
+#
+# Hard findings from v1 CSV:
+#   - breakout_5d_high/low: 9-11% WR (n=101) → noise generator, BLOCKED
+#   - RSI 65-75 long zone:  8.2% WR (n=90)  → chasing, BLOCKED
+#   - RSI 55-65 long zone:  25.0% WR        → keep
+#   - Near 52WH:            anti-predictive  → flip to PENALTY
+#   - Winners avg hold:     10.3 bars       → extend horizon
+#   - Losers die:           5.3 bars        → stops too tight or chase entries
+#
+# Set PRECISION_MODE=False env to revert to permissive v2 thresholds.
+import os
+PRECISION_MODE = os.environ.get("PRECISION_MODE", "1") != "0"
 
-VOL_MIN_X             = 1.3   # confirmation candle volume multiplier
-MIN_RR                = 1.5   # v2: 3.0 was unreachable in 15-bar hold (44% time-exit)
-SWING_PIVOT_N         = 3     # bars on each side for swing pivot (more = stricter)
-SWING_LOOKBACK        = 20    # how far back to search for swing
-PULLBACK_MAX_BARS     = 5     # pullback window
-COMPRESS_MAX_BODY_ATR = 0.7   # consolidation: avg body ≤ 0.7 × ATR
-EXTENDED_MAX_BODY_ATR = 1.5   # entry candle body cannot exceed this (chasing filter)
-EMA20_PULLBACK_TOL    = 0.015 # within 1.5% of EMA20 = touched
-PIVOT_ATR_BUFFER      = 0.5   # v2: SL = pivot ± buffer×ATR (escape routine noise)
+if PRECISION_MODE:
+    RSI_LONG_MIN, RSI_LONG_MAX   = 50.0, 65.0   # v3: kill 65-75 chase zone
+    RSI_SHORT_MIN, RSI_SHORT_MAX = 25.0, 40.0   # v2 already tight, keep
+    VOL_MIN_X                    = 2.0          # v3: was 1.3, raise bar
+    MIN_RR                       = 1.5
+    RS_LONG_MIN_VS_NIFTY         = 1.05         # v3: tighter than v2's 1.03
+    RS_SHORT_MAX_VS_NIFTY        = 0.92
+    RS_SHORT_RSI_MAX             = 40.0
+    NEAR_52W_HIGH_PENALTY        = True         # v3: flip from bonus to penalty
+    REQUIRE_REVERSAL_CANDLE      = True         # v3: block standalone breakouts
+else:
+    RSI_LONG_MIN, RSI_LONG_MAX   = 45.0, 75.0
+    RSI_SHORT_MIN, RSI_SHORT_MAX = 25.0, 55.0
+    VOL_MIN_X                    = 1.3
+    MIN_RR                       = 1.5
+    RS_LONG_MIN_VS_NIFTY         = 1.03
+    RS_SHORT_MAX_VS_NIFTY        = 0.92
+    RS_SHORT_RSI_MAX             = 40.0
+    NEAR_52W_HIGH_PENALTY        = False
+    REQUIRE_REVERSAL_CANDLE      = False
 
-# Elite-trader edges
-RS_LONG_MIN_VS_NIFTY  = 1.03  # stock 20D return ≥ NIFTY 20D return by 3% (relative)
-RS_SHORT_MAX_VS_NIFTY = 0.92  # v2: shorts tightened from 0.97 → 0.92 (Indian up-drift)
-RS_SHORT_RSI_MAX      = 40.0  # v2: shorts need RSI ≤ 40 (not generic 25-55 zone)
-NEAR_52W_HIGH_PCT     = 0.90  # within 10% of 52W high (bonus)
-NEAR_52W_LOW_PCT      = 1.10  # within 10% of 52W low (bonus for shorts)
+SWING_PIVOT_N         = 3
+SWING_LOOKBACK        = 20
+PULLBACK_MAX_BARS     = 5
+COMPRESS_MAX_BODY_ATR = 0.7
+EXTENDED_MAX_BODY_ATR = 1.5
+EMA20_PULLBACK_TOL    = 0.015
+PIVOT_ATR_BUFFER      = 0.5
+
+NEAR_52W_HIGH_PCT     = 0.90
+NEAR_52W_LOW_PCT      = 1.10
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -200,6 +224,42 @@ def _swing_high(df: pd.DataFrame, n: int = 3, lookback: int = 20) -> Optional[fl
 # ──────────────────────────────────────────────────────────────────────────
 # GATES — sequential, binary, short-circuit
 # ──────────────────────────────────────────────────────────────────────────
+
+def gate0_regime(nifty_df: Optional[pd.DataFrame], direction_hint: Optional[str] = None
+                 ) -> Tuple[bool, Dict]:
+    """
+    v3 GATE 0: Market regime filter.
+
+    Skips entries when overall NIFTY regime is hostile to the direction:
+      - Bullish regime (NIFTY close > NIFTY EMA50, slope > 0): longs OK, shorts BLOCKED
+      - Bearish regime: shorts OK, longs BLOCKED
+      - Neutral / no data: pass through (degrade gracefully)
+    """
+    if nifty_df is None or nifty_df.empty or len(nifty_df) < EMA_SLOW + 5:
+        return True, {"reason": "no_nifty_regime_data_pass"}
+
+    close = nifty_df['close']
+    ema50 = _ema(close, EMA_SLOW)
+    last_close = float(close.iloc[-1])
+    e50 = float(ema50.iloc[-1])
+    slope = float(ema50.iloc[-1] - ema50.iloc[-5])
+
+    bullish = last_close > e50 and slope > 0
+    bearish = last_close < e50 and slope < 0
+
+    info = {
+        "nifty_close": round(last_close, 1),
+        "nifty_ema50": round(e50, 1),
+        "nifty_slope_5d": round(slope, 2),
+        "regime": "bullish" if bullish else ("bearish" if bearish else "neutral"),
+    }
+
+    if direction_hint == "long" and bearish:
+        return False, {**info, "reason": "long_in_bearish_regime"}
+    if direction_hint == "short" and bullish:
+        return False, {**info, "reason": "short_in_bullish_regime"}
+    return True, info
+
 
 def gate1_htf_trend(df_daily: pd.DataFrame) -> Tuple[Optional[str], Dict]:
     """
@@ -357,13 +417,33 @@ def gate3_confirmation(df_daily: pd.DataFrame, direction: str) -> Tuple[bool, Li
         elif direction == "short" and upper_wick >= 2 * body_n and c_n <= (h_n - 0.66 * rng_n):
             patterns.append("bearish_pin_bar")
 
-    # Breakout close past prior 5-bar extreme
+    # Reversal candles already collected (engulfing/marubozu/pin).
+    # v3: breakout_5d (9-11% WR in v1 backtest) is now BONUS info, NOT a
+    # standalone trigger when precision mode on.
+    reversal_present = any(p in {
+        "bullish_engulfing", "bearish_engulfing",
+        "bullish_marubozu",  "bearish_marubozu",
+        "bullish_pin_bar",   "bearish_pin_bar",
+    } for p in patterns)
+
+    # Breakout close past prior 5-bar extreme — kept as informational tag only
     prior_high = float(h.iloc[-6:-1].max())
     prior_low = float(l.iloc[-6:-1].min())
+    breakout_tag = False
     if direction == "long" and c_n > prior_high:
         patterns.append("breakout_5d_high")
+        breakout_tag = True
     elif direction == "short" and c_n < prior_low:
         patterns.append("breakout_5d_low")
+        breakout_tag = True
+
+    # v3: close must be in upper/lower 30% of range (strength of close)
+    close_strength_ok = True
+    if REQUIRE_REVERSAL_CANDLE:
+        if direction == "long":
+            close_strength_ok = c_n >= (l_n + 0.70 * rng_n)
+        else:
+            close_strength_ok = c_n <= (h_n - 0.70 * rng_n)
 
     # Volume gate
     avg_vol = float(v.iloc[-21:-1].mean())
@@ -371,16 +451,25 @@ def gate3_confirmation(df_daily: pd.DataFrame, direction: str) -> Tuple[bool, Li
     vol_ratio = cur_vol / max(avg_vol, 1.0)
     vol_ok = vol_ratio >= VOL_MIN_X
 
-    has_pattern = len(patterns) > 0
-    ok = has_pattern and vol_ok
+    # v3: precision mode requires REVERSAL candle (not just breakout) + close strength
+    if REQUIRE_REVERSAL_CANDLE:
+        has_pattern = reversal_present
+    else:
+        has_pattern = len(patterns) > 0
+
+    ok = has_pattern and vol_ok and close_strength_ok
 
     return ok, patterns, {
         "vol_ratio": round(vol_ratio, 2),
         "vol_ok": vol_ok,
-        "has_pattern": has_pattern,
+        "has_reversal": reversal_present,
+        "breakout_tag": breakout_tag,
+        "close_strength_ok": close_strength_ok,
         "reason": (
             "ok" if ok
-            else ("no_confirm_pattern" if not has_pattern else "low_volume")
+            else ("no_reversal_candle" if not has_pattern
+                  else "low_volume" if not vol_ok
+                  else "weak_close")
         ),
     }
 
@@ -521,6 +610,14 @@ def generate_signal_india_swing(
         log.debug(f"[ISW] {symbol} KILL g1: {g1.get('reason')}")
         return None
 
+    # ── G0: Market regime (NIFTY) ────────────────────────────────────
+    # v3: skip longs in bearish NIFTY, skip shorts in bullish NIFTY.
+    g0_ok, g0 = gate0_regime(nf, direction_hint=direction)
+    gate_results["g0_regime"] = g0_ok
+    if not g0_ok:
+        log.debug(f"[ISW] {symbol} KILL g0: {g0.get('reason')}")
+        return None
+
     # ── G2: Pullback ─────────────────────────────────────────────────
     g2_ok, g2 = gate2_pullback(df, direction)
     gate_results["g2_pullback"] = g2_ok
@@ -593,12 +690,19 @@ def generate_signal_india_swing(
     score = 70.0
     if "bullish_marubozu" in patterns or "bearish_marubozu" in patterns:
         score += 5
+    # v3: breakout tag now penalty, not bonus. Data: 9-11% WR. -5 if standalone-ish.
     if "breakout_5d_high" in patterns or "breakout_5d_low" in patterns:
-        score += 5
+        # Only counts as positive if PAIRED with a reversal candle.
+        if g3.get("has_reversal"):
+            pass  # neutral
+        else:
+            score -= 5
+    # v3: 52WH proximity is ANTI-predictive (33% loss rate vs 12% win rate).
+    # Flip bonus to penalty when precision mode on.
     if g5.get("near_52wh") and direction == "long":
-        score += 10
+        score += (-10 if NEAR_52W_HIGH_PENALTY else 10)
     if g5.get("near_52wl") and direction == "short":
-        score += 10
+        score += (-10 if NEAR_52W_HIGH_PENALTY else 10)
     # RS bonus
     rs = g5.get("rs_vs_nifty")
     if rs is not None:
