@@ -86,7 +86,7 @@ _SWING = ModeConfig(
     replay_window_hours=24.0 * 10,
     replay_bar="1d",                # walk DAILY bars over the swing window
     bypass_intraday_time_gates=True,
-    min_days_to_expiry=10,          # swing hold needs real time value left
+    min_days_to_expiry=15,          # swing = monthly options (theta safe for 5-10d hold)
     recent_trim_days=0,             # NEVER trim daily history (kills indicators)
 )
 

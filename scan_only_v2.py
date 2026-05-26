@@ -114,8 +114,49 @@ def _scan(engine, api, top_n, universe=None, orb_only=False, vol_only=False):
         sigs = vol_sigs
         print(f'  [VOL-ONLY] {len(sigs)} compression signals (other strategies disabled)')
     else:
-        print(f'[{ts}] Scanning {len(universe)} symbols (1D+15m+5m confluence)...')
-        sigs = engine.scan_universe(api, universe)
+        # ── STRATEGY SWITCH ────────────────────────────────────────────────
+        # Default: india_swing 8-gate sequential (replaces 17-detector vote stack).
+        # Legacy: set STRATEGY_LEGACY=1 env to fall back to old TimeframeSync engine.
+        # Shadow A/B: set STRATEGY_SHADOW=1 to also run legacy engine in
+        # background and journal its signals with strategy_origin='legacy_shadow'
+        # for 30-day WR comparison (NOT enriched/emitted to UI).
+        # Vote-stack delivered 30% WR with no Grade-A edge (journal audit
+        # 2026-05-26, n=932). New gates target 40-50% WR with 1:3 RR.
+        use_legacy = os.environ.get("STRATEGY_LEGACY") == "1"
+        run_shadow = os.environ.get("STRATEGY_SHADOW") == "1"
+        if use_legacy:
+            print(f'[{ts}] Scanning {len(universe)} symbols (LEGACY 17-detector vote stack)...')
+            sigs = engine.scan_universe(api, universe)
+            for s in sigs:
+                s["strategy_origin"] = "legacy"
+        else:
+            print(f'[{ts}] Scanning {len(universe)} symbols (india_swing 8-gate)...')
+            from core.strategy_india_swing import scan_universe_india_swing
+            sigs = scan_universe_india_swing(api, universe)
+            for s in sigs:
+                s["strategy_origin"] = "india_swing"
+            print(f'  [ISW] {len(sigs)} signals passed all 8 gates')
+
+            # Shadow-mode: run legacy engine and journal its candidates without
+            # enriching/emitting them. Compares both engines' raw output for WR.
+            if run_shadow:
+                try:
+                    shadow_sigs = engine.scan_universe(api, universe)
+                    print(f'  [SHADOW] legacy engine produced {len(shadow_sigs)} candidates')
+                    try:
+                        from core.signal_journal import record_signal as _record
+                        for ss in shadow_sigs:
+                            ss["strategy_origin"] = "legacy_shadow"
+                            ss["shadow"] = True
+                            try:
+                                _record(ss)
+                            except Exception:
+                                pass
+                    except Exception as _je:
+                        log.debug(f"shadow journal err: {_je}")
+                except Exception as _se:
+                    log.debug(f"shadow scan err: {_se}")
+
         # Merge ORB signals — for symbols where ORB fired, prefer ORB over pattern signal
         if orb_sigs:
             orb_syms = {s["symbol"] for s in orb_sigs}
