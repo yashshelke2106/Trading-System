@@ -686,6 +686,19 @@ def generate_signal_india_swing(
         g8 = {"delivery_skipped": True}
         gate_results["g8_delivery"] = True
 
+    # ── G9: Sector leader (top-3 long, bottom-3 short within sector) ─
+    try:
+        from core.sector_leader import check_sector_leader
+        g9_ok, g9 = check_sector_leader(symbol, direction)
+        gate_results["g9_sector_leader"] = g9_ok
+        if not g9_ok:
+            log.debug(f"[ISW] {symbol} KILL g9: {g9.get('reason')}")
+            return None
+    except Exception as e:
+        log.debug(f"[ISW] {symbol} g9 skipped (sector_leader module err): {e}")
+        g9 = {"sector_leader_skipped": True}
+        gate_results["g9_sector_leader"] = True
+
     # ── ALL GATES PASSED — build signal ──────────────────────────────
     score = 70.0
     if "bullish_marubozu" in patterns or "bearish_marubozu" in patterns:
@@ -732,10 +745,38 @@ def generate_signal_india_swing(
     grade = "S" if score >= 90 else "A" if score >= 78 else "B"
 
     atr_val = float(_atr(df, ATR_LEN).iloc[-1])
-    reason = (f"5gate clean | trend={direction} ema20={g1['ema20']:.1f}>{g1['ema50']:.1f} "
+    # ── G10: ML probability filter (FINAL gate) ─────────────────────
+    # Uses everything we've computed (score, RSI, RS, patterns, etc.) to
+    # estimate P(win). Pass-through if model not trained yet (cold start).
+    ml_prob: Optional[float] = None
+    try:
+        from core.ml_filter import check_ml_filter
+        candidate_for_ml = {
+            "rsi": g5.get("rsi", 0.0),
+            "rs_vs_nifty": g5.get("rs_vs_nifty", 1.0) or 1.0,
+            "score": score,
+            "vol_ratio": g3.get("vol_ratio", 1.0),
+            "grade": grade,
+            "direction": direction,
+            "patterns": patterns,
+            "near_52wh": bool(g5.get("near_52wh", False)),
+            "near_52wl": bool(g5.get("near_52wl", False)),
+        }
+        g10_ok, g10 = check_ml_filter(candidate_for_ml)
+        gate_results["g10_ml"] = g10_ok
+        ml_prob = g10.get("ml_prob")
+        if not g10_ok:
+            log.debug(f"[ISW] {symbol} KILL g10: {g10.get('reason')}")
+            return None
+    except Exception as e:
+        log.debug(f"[ISW] {symbol} g10 skipped (ml_filter err): {e}")
+        gate_results["g10_ml"] = True
+
+    reason = (f"10-gate clean | trend={direction} ema20={g1['ema20']:.1f}>{g1['ema50']:.1f} "
               f"| confirm=[{','.join(patterns)}] vol={g3['vol_ratio']:.1f}x "
               f"| RR={g4['rr']:.1f} risk={g4['risk_pct']:.1f}% "
-              f"| RSI={g5.get('rsi'):.0f}")
+              f"| RSI={g5.get('rsi'):.0f}"
+              + (f" | ML={ml_prob:.2f}" if ml_prob is not None else ""))
 
     return IndiaSwingSignal(
         symbol=symbol,
