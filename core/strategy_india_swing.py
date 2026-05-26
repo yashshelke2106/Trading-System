@@ -64,17 +64,19 @@ RSI_LONG_MIN, RSI_LONG_MAX   = 45.0, 75.0
 RSI_SHORT_MIN, RSI_SHORT_MAX = 25.0, 55.0
 
 VOL_MIN_X             = 1.3   # confirmation candle volume multiplier
-MIN_RR                = 3.0   # mandatory risk:reward
+MIN_RR                = 1.5   # v2: 3.0 was unreachable in 15-bar hold (44% time-exit)
 SWING_PIVOT_N         = 3     # bars on each side for swing pivot (more = stricter)
 SWING_LOOKBACK        = 20    # how far back to search for swing
 PULLBACK_MAX_BARS     = 5     # pullback window
 COMPRESS_MAX_BODY_ATR = 0.7   # consolidation: avg body ≤ 0.7 × ATR
 EXTENDED_MAX_BODY_ATR = 1.5   # entry candle body cannot exceed this (chasing filter)
 EMA20_PULLBACK_TOL    = 0.015 # within 1.5% of EMA20 = touched
+PIVOT_ATR_BUFFER      = 0.5   # v2: SL = pivot ± buffer×ATR (escape routine noise)
 
 # Elite-trader edges
 RS_LONG_MIN_VS_NIFTY  = 1.03  # stock 20D return ≥ NIFTY 20D return by 3% (relative)
-RS_SHORT_MAX_VS_NIFTY = 0.97  # short candidate underperforming NIFTY by ≥ 3%
+RS_SHORT_MAX_VS_NIFTY = 0.92  # v2: shorts tightened from 0.97 → 0.92 (Indian up-drift)
+RS_SHORT_RSI_MAX      = 40.0  # v2: shorts need RSI ≤ 40 (not generic 25-55 zone)
 NEAR_52W_HIGH_PCT     = 0.90  # within 10% of 52W high (bonus)
 NEAR_52W_LOW_PCT      = 1.10  # within 10% of 52W low (bonus for shorts)
 
@@ -246,22 +248,33 @@ def gate2_pullback(df_daily: pd.DataFrame, direction: str) -> Tuple[bool, Dict]:
     if last_atr <= 0 or np.isnan(last_atr):
         return False, {"reason": "bad_atr"}
 
-    # Pullback: at least one of last N bars touched EMA20 within tolerance
+    # v2: Pullback + REJECTION. Bar that touched EMA20 must ALSO close back
+    # in direction (long: close > EMA20). This filters out pullbacks that
+    # keep falling through EMA20. v1 accepted any touch = caught knife.
     touched = False
+    rejected = False
     touch_bar_idx = None
     for i in range(1, PULLBACK_MAX_BARS + 1):
         e20_i = float(ema20.iloc[-i])
+        c_i = float(df_daily['close'].iloc[-i])
         if direction == "long":
             lo_i = float(df_daily['low'].iloc[-i])
-            if lo_i <= e20_i * (1 + EMA20_PULLBACK_TOL) and lo_i >= e20_i * (1 - EMA20_PULLBACK_TOL):
+            if (lo_i <= e20_i * (1 + EMA20_PULLBACK_TOL) and
+                lo_i >= e20_i * (1 - EMA20_PULLBACK_TOL)):
                 touched = True
                 touch_bar_idx = -i
+                # Rejection: that bar closed back above EMA20 (held as support)
+                if c_i > e20_i:
+                    rejected = True
                 break
         else:
             hi_i = float(df_daily['high'].iloc[-i])
-            if hi_i >= e20_i * (1 - EMA20_PULLBACK_TOL) and hi_i <= e20_i * (1 + EMA20_PULLBACK_TOL):
+            if (hi_i >= e20_i * (1 - EMA20_PULLBACK_TOL) and
+                hi_i <= e20_i * (1 + EMA20_PULLBACK_TOL)):
                 touched = True
                 touch_bar_idx = -i
+                if c_i < e20_i:
+                    rejected = True
                 break
 
     # Compression: avg of last 3 candle bodies ≤ COMPRESS_MAX_BODY_ATR × ATR
@@ -273,10 +286,14 @@ def gate2_pullback(df_daily: pd.DataFrame, direction: str) -> Tuple[bool, Dict]:
     current_body = float(bodies.iloc[-1])
     not_extended = current_body <= EXTENDED_MAX_BODY_ATR * last_atr
 
-    ok = (touched or compressed) and not_extended
+    # v2: accept if (rejection from EMA20) OR (compression base) — touch alone
+    # without rejection is now insufficient.
+    setup_ok = rejected or compressed
+    ok = setup_ok and not_extended
 
     return ok, {
         "touched_ema20": touched,
+        "rejected_ema20": rejected,
         "touch_bar": touch_bar_idx,
         "compressed": compressed,
         "current_body_atr": round(current_body / last_atr, 2),
@@ -285,6 +302,7 @@ def gate2_pullback(df_daily: pd.DataFrame, direction: str) -> Tuple[bool, Dict]:
         "reason": (
             "ok" if ok
             else ("extended_candle" if not not_extended
+                  else "touched_no_rejection" if (touched and not rejected and not compressed)
                   else "no_pullback_or_compress")
         ),
     }
@@ -369,40 +387,54 @@ def gate3_confirmation(df_daily: pd.DataFrame, direction: str) -> Tuple[bool, Li
 
 def gate4_risk(df_daily: pd.DataFrame, direction: str, entry: float) -> Tuple[bool, Dict]:
     """
-    Structural stop (swing low/high) + RR ≥ MIN_RR.
+    Structural stop (swing low/high) + ATR buffer + RR ≥ MIN_RR.
+
+    v2: raw pivot got tagged by intraday noise → 113 SL hits in v1 backtest.
+    Now SL = pivot ± PIVOT_ATR_BUFFER × ATR (deeper). Risk still capped 4%.
     """
+    atr_val = float(_atr(df_daily, ATR_LEN).iloc[-1])
+    if atr_val <= 0 or np.isnan(atr_val):
+        return False, {"reason": "bad_atr"}
+
+    max_risk_pct = 0.04
+
     if direction == "long":
-        sl = _swing_low(df_daily, n=SWING_PIVOT_N, lookback=SWING_LOOKBACK)
-        if sl is None or sl >= entry:
-            return False, {"reason": "no_valid_swing_low", "sl": sl}
-        # Tighten if pivot is too far (cap risk to 4% of entry to avoid stale pivots)
-        max_risk_pct = 0.04
+        pivot = _swing_low(df_daily, n=SWING_PIVOT_N, lookback=SWING_LOOKBACK)
+        if pivot is None or pivot >= entry:
+            return False, {"reason": "no_valid_swing_low", "pivot": pivot}
+        # ATR buffer below pivot
+        sl = pivot - PIVOT_ATR_BUFFER * atr_val
+        # Cap risk to max_risk_pct of entry
         if (entry - sl) / entry > max_risk_pct:
             sl = entry * (1 - max_risk_pct)
         risk = entry - sl
         target = entry + MIN_RR * risk
         return True, {
             "sl": round(sl, 2),
+            "pivot": round(pivot, 2),
             "target": round(target, 2),
             "rr": MIN_RR,
             "risk": round(risk, 2),
             "risk_pct": round(risk / entry * 100, 2),
+            "atr_buffer": round(PIVOT_ATR_BUFFER * atr_val, 2),
         }
     else:
-        sh = _swing_high(df_daily, n=SWING_PIVOT_N, lookback=SWING_LOOKBACK)
-        if sh is None or sh <= entry:
-            return False, {"reason": "no_valid_swing_high", "sh": sh}
-        max_risk_pct = 0.04
-        if (sh - entry) / entry > max_risk_pct:
-            sh = entry * (1 + max_risk_pct)
-        risk = sh - entry
+        pivot = _swing_high(df_daily, n=SWING_PIVOT_N, lookback=SWING_LOOKBACK)
+        if pivot is None or pivot <= entry:
+            return False, {"reason": "no_valid_swing_high", "pivot": pivot}
+        sl = pivot + PIVOT_ATR_BUFFER * atr_val
+        if (sl - entry) / entry > max_risk_pct:
+            sl = entry * (1 + max_risk_pct)
+        risk = sl - entry
         target = entry - MIN_RR * risk
         return True, {
-            "sl": round(sh, 2),
+            "sl": round(sl, 2),
+            "pivot": round(pivot, 2),
             "target": round(target, 2),
             "rr": MIN_RR,
             "risk": round(risk, 2),
             "risk_pct": round(risk / entry * 100, 2),
+            "atr_buffer": round(PIVOT_ATR_BUFFER * atr_val, 2),
         }
 
 
@@ -419,8 +451,10 @@ def gate5_quality(df_daily: pd.DataFrame, direction: str,
     info["rsi"] = round(rsi, 1)
     if direction == "long" and not (RSI_LONG_MIN <= rsi <= RSI_LONG_MAX):
         return False, {**info, "reason": f"rsi_{rsi:.0f}_outside_long_zone"}
-    if direction == "short" and not (RSI_SHORT_MIN <= rsi <= RSI_SHORT_MAX):
-        return False, {**info, "reason": f"rsi_{rsi:.0f}_outside_short_zone"}
+    # v2: shorts stricter — RSI must be ≤ RS_SHORT_RSI_MAX (40 not 55).
+    # Indian market structural up-drift means RSI 40-55 shorts get squeezed.
+    if direction == "short" and not (RSI_SHORT_MIN <= rsi <= RS_SHORT_RSI_MAX):
+        return False, {**info, "reason": f"rsi_{rsi:.0f}_outside_short_v2_zone"}
 
     # Relative strength vs NIFTY (20-day)
     if (nifty_df is not None and len(nifty_df) >= 21
