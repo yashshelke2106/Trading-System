@@ -131,22 +131,50 @@ def fetch_option_chain(symbol: str) -> List[Dict]:
         # is a theta bonfire. If the nearest expiry is closer than the
         # mode's min_days_to_expiry, roll to the first expiry that gives
         # enough time value. Intraday mode keeps nearest (min=2).
+        from datetime import datetime as _dt
+        today = _dt.now().date()
         try:
             from core.trade_mode import get_mode
-            from datetime import datetime as _dt
             min_days = int(get_mode().min_days_to_expiry)
-            today = _dt.now().date()
+        except Exception as e:
+            log.warning(f"NSE OC {symbol}: mode lookup failed ({e}); using min_days=1")
+            min_days = 1
+
+        rolled = False
+        for exp in expiry_dates:
+            try:
+                iso = _nse_expiry_to_iso(exp)
+                d = _dt.fromisoformat(iso).date()
+            except Exception as e:
+                log.debug(f"NSE OC {symbol}: bad expiry '{exp}' ({e})")
+                continue
+            if (d - today).days >= min_days:
+                nearest_expiry = exp
+                rolled = True
+                break
+
+        # SAFETY: never return a chain expiring today or already past.
+        # If nothing met min_days, take the next FUTURE expiry (days > 0).
+        if not rolled:
             for exp in expiry_dates:
                 try:
                     iso = _nse_expiry_to_iso(exp)
                     d = _dt.fromisoformat(iso).date()
                 except Exception:
                     continue
-                if (d - today).days >= min_days:
+                if (d - today).days > 0:
                     nearest_expiry = exp
+                    log.info(
+                        f"NSE OC {symbol}: no expiry >= {min_days}d, "
+                        f"rolled forward to {exp} (next future)"
+                    )
                     break
-        except Exception:
-            pass
+            else:
+                log.warning(
+                    f"NSE OC {symbol}: NO future expiry available "
+                    f"(nearest={nearest_expiry}); chain unusable"
+                )
+                return []
 
         # Filter to selected expiry only
         nearest = [s for s in all_strikes if s.get("expiryDate") == nearest_expiry]

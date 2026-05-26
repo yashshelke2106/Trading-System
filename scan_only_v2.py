@@ -136,6 +136,19 @@ def _scan(engine, api, top_n, universe=None, orb_only=False, vol_only=False):
     dropped_no_chain = []
     for s in sigs:
         try:
+            # PRE-CHAIN EXPIRY GATE: skip symbols whose nearest expiry is today.
+            # Saves an NSE API call and short-circuits before chain-derived expiry
+            # can leak through. Uses calendar truth (holiday-shift-aware).
+            try:
+                from core.nse_calendar import days_to_next_expiry
+                if days_to_next_expiry(s["symbol"]) < 1:
+                    dropped_no_chain.append(s["symbol"] + "(expiry_today_calendar)")
+                    continue
+            except Exception as _e:
+                # Calendar lookup must not silently let signal through — log and
+                # rely on the post-chain HARD GATE below as the backstop.
+                pass
+
             chain = get_option_chain(s["symbol"])
             if not chain:
                 dropped_no_chain.append(s["symbol"])
@@ -148,6 +161,19 @@ def _scan(engine, api, top_n, universe=None, orb_only=False, vol_only=False):
                 chain_data=chain,
             )
             if rec:
+                # HARD GATE: never trade an option expiring today (or already expired).
+                # Same-day expiry = pure gamma/theta — premium can go to ~0 within hours
+                # regardless of direction. Holiday-shifted monthly expiry (e.g. Tue 2026-05-26
+                # for Buddha Purnima) slipped past Thursday-only volatility filter.
+                try:
+                    _exp_d = datetime.fromisoformat(rec["expiry"]).date()
+                    if (_exp_d - datetime.now().date()).days < 1:
+                        dropped_no_chain.append(s["symbol"] + "(expiry_today)")
+                        continue
+                except Exception:
+                    dropped_no_chain.append(s["symbol"] + "(expiry_parse_fail)")
+                    continue
+
                 # Sanity check: option SL/target must be within 3x of entry premium.
                 entry_p = rec["entry_prem"]
                 if entry_p > 0:

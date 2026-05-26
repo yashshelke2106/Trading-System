@@ -49,6 +49,19 @@ THETA_DAILY_DECAY_KILL = 0.10   # if daily theta > 10% of premium, heavy penalty
 MIN_DAYS_TO_EXPIRY     = 1      # signals on expiry day get max penalty
 THETA_PENALTY_LIGHT    = -8     # score adjustment for high theta
 THETA_PENALTY_HEAVY    = -20    # score adjustment for very high theta
+THETA_PENALTY_KILL     = -999   # expiry-day kill: drives score below any grade
+
+
+def is_expiry_today_or_past(signal: Dict) -> bool:
+    """True if signal's option_expiry is today or earlier. Independent of theta field."""
+    expiry_str = signal.get("option_expiry")
+    if not expiry_str:
+        return False
+    try:
+        expiry_date = date.fromisoformat(str(expiry_str))
+    except (ValueError, TypeError):
+        return False
+    return (expiry_date - date.today()).days <= 0
 
 
 def theta_score_penalty(signal: Dict) -> int:
@@ -57,11 +70,19 @@ def theta_score_penalty(signal: Dict) -> int:
     Called during signal scoring (before grade assignment).
     Returns negative int to subtract from confluence_score.
 
+    Expiry-day signals return THETA_PENALTY_KILL regardless of whether
+    BSM theta was computed — never gamble on same-day expiry.
+
     Inputs from signal dict:
-      - theta:      BSM daily theta (₹ per day, negative)
-      - entry_prem: option entry premium (₹)
+      - theta:      BSM daily theta (₹ per day, negative) — optional
+      - entry_prem: option entry premium (₹) — optional
       - option_expiry: expiry date string (YYYY-MM-DD)
     """
+    # Expiry-day check FIRST — fires even if theta/entry_prem missing
+    if is_expiry_today_or_past(signal):
+        log.info(f"[Theta] {signal.get('symbol')} expiry TODAY → KILL {THETA_PENALTY_KILL}")
+        return THETA_PENALTY_KILL
+
     theta = signal.get("theta")
     entry_prem = signal.get("entry_prem")
     expiry_str = signal.get("option_expiry")
@@ -93,16 +114,12 @@ def theta_score_penalty(signal: Dict) -> int:
         log.debug(f"[Theta] {signal.get('symbol')} decay={daily_decay_pct:.1%} "
                   f"of premium/day → light penalty {THETA_PENALTY_LIGHT}")
 
-    # Days to expiry penalty
+    # Days to expiry (next-day) light penalty
     if expiry_str:
         try:
             expiry_date = date.fromisoformat(expiry_str)
             days_left = (expiry_date - date.today()).days
-            if days_left <= 0:
-                penalty += THETA_PENALTY_HEAVY  # expiry day: max bleed
-                log.debug(f"[Theta] {signal.get('symbol')} expiry TODAY → "
-                          f"penalty {THETA_PENALTY_HEAVY}")
-            elif days_left <= MIN_DAYS_TO_EXPIRY:
+            if days_left <= MIN_DAYS_TO_EXPIRY:
                 penalty += THETA_PENALTY_LIGHT
                 log.debug(f"[Theta] {signal.get('symbol')} {days_left}d to expiry → "
                           f"penalty {THETA_PENALTY_LIGHT}")
