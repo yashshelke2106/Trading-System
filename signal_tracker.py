@@ -275,6 +275,25 @@ def main():
                     for k in closed:
                         tracked.pop(k, None)
                     _save_tracked(tracked)
+                # Daily metrics rollup — tracker is the natural once-a-day
+                # trigger (runs every market day, fires once at close). Writes
+                # one line to logs/metrics_daily.jsonl with rolling WR/PF/DD +
+                # drift/redesign alerts. Failure here must not block shutdown.
+                try:
+                    from core.metrics_writer import write_metrics
+                    rec = write_metrics()
+                    r30 = rec.get("rolling_30d", {})
+                    print(f"[Metrics] {rec['date']} written: "
+                          f"30d WR {r30.get('wr')} PF {r30.get('pf')} "
+                          f"DD {r30.get('max_dd_pct')}% "
+                          f"| drift={rec.get('drift_alert')} "
+                          f"redesign={rec.get('redesign_alert')}")
+                    if rec.get("drift_alert"):
+                        print("  [!] DRIFT ALERT — 30d PF<0.9 or DD>8%. Review before next session.")
+                    if rec.get("redesign_alert"):
+                        print("  [!!] REDESIGN ALERT — 60+ days of 90d WR<35%. Strategy edge gone.")
+                except Exception as e:
+                    print(f"[Metrics] rollup failed (non-fatal): {e}")
                 print("Market closed. Tracker done for today.")
                 break
             time.sleep(30)

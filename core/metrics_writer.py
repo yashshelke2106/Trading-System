@@ -175,10 +175,25 @@ def _wr_streak_days(metrics_history: List[Dict], min_wr: float) -> int:
     return streak
 
 
-def write_metrics(as_of: Optional[date] = None) -> Dict:
+def write_metrics(as_of: Optional[date] = None, force: bool = False) -> Dict:
     """Compute today's metrics line + append to metrics_daily.jsonl.
-    Returns the written dict."""
+    Returns the written dict.
+
+    Idempotent per day: if a record for `today` already exists, returns it
+    unchanged instead of appending a duplicate (tracker may restart after
+    close). Pass force=True to overwrite-append anyway (e.g. backfill)."""
     today = as_of or date.today()
+
+    # Idempotency guard — skip if today already recorded
+    if not force and METRICS_FILE.exists():
+        with open(METRICS_FILE) as f:
+            for line in f:
+                try:
+                    rec = json.loads(line)
+                    if rec.get("date") == today.isoformat():
+                        return rec
+                except Exception:
+                    continue
 
     # Pull rolling windows
     rows_30d = _load_journal(since=today - timedelta(days=30))
