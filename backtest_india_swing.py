@@ -69,16 +69,28 @@ def _yf_ticker(sym: str) -> str:
 
 
 def fetch_daily(ticker: str, days: int = DEFAULT_DAYS) -> Optional[pd.DataFrame]:
-    """Fetch daily OHLCV via yfinance. Returns columns: open/high/low/close/volume."""
-    import yfinance as yf
+    """Fetch daily OHLCV via yfinance over curl_cffi (bypasses corporate SSL
+    interception that silently kills plain yf.download in this env)."""
     try:
-        df = yf.download(ticker, period=f"{days}d", interval="1d",
-                         progress=False, auto_adjust=False)
+        import yfinance as yf
+        _yf_session = None
+        try:
+            from curl_cffi import requests as cffi_requests
+            _yf_session = cffi_requests.Session(impersonate="chrome", verify=False)
+        except Exception:
+            pass
+        try:
+            tk = yf.Ticker(ticker, session=_yf_session) if _yf_session else yf.Ticker(ticker)
+        except TypeError:
+            tk = yf.Ticker(ticker)
+        df = tk.history(period=f"{days}d", interval="1d", auto_adjust=False)
         if df is None or df.empty:
             return None
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = [c[0] if isinstance(c, tuple) else c for c in df.columns]
         df.columns = [c.lower() for c in df.columns]
+        if hasattr(df.index, "tz") and df.index.tz is not None:
+            df.index = df.index.tz_localize(None)
         required = {"open", "high", "low", "close", "volume"}
         if not required.issubset(df.columns):
             return None
@@ -176,8 +188,10 @@ def run_backtest(universe_data: Dict[str, pd.DataFrame],
             # Snapshot up to and including bar t (no look-ahead)
             sub_df = df.iloc[:t + 1]
             sub_nf = nf.iloc[:t + 1]
+            as_of = sub_df.index[-1]
             try:
-                sig = generate_signal_india_swing(sym, sub_df, sub_nf)
+                sig = generate_signal_india_swing(sym, sub_df, sub_nf,
+                                                  as_of_date=as_of)
             except Exception:
                 sig = None
             if sig is None:

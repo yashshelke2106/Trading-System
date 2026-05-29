@@ -581,9 +581,14 @@ def generate_signal_india_swing(
     symbol: str,
     df_daily: pd.DataFrame,
     nifty_df: Optional[pd.DataFrame] = None,
+    as_of_date=None,
 ) -> Optional[IndiaSwingSignal]:
     """
     Run 5-gate sequential. Return signal only if ALL pass.
+
+    as_of_date: when called from a backtest, pass the trade's evaluation
+    date so point-in-time gates (G9 sector_leader) don't peek into the
+    future. None = live mode.
     """
     if df_daily is None or df_daily.empty or len(df_daily) < EMA_SLOW + 5:
         return None
@@ -689,7 +694,7 @@ def generate_signal_india_swing(
     # ── G9: Sector leader (top-3 long, bottom-3 short within sector) ─
     try:
         from core.sector_leader import check_sector_leader
-        g9_ok, g9 = check_sector_leader(symbol, direction)
+        g9_ok, g9 = check_sector_leader(symbol, direction, as_of_date=as_of_date)
         gate_results["g9_sector_leader"] = g9_ok
         if not g9_ok:
             log.debug(f"[ISW] {symbol} KILL g9: {g9.get('reason')}")
