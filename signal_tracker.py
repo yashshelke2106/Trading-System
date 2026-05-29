@@ -42,50 +42,24 @@ def _stop(sig, frame):
 
 def _get_price(symbol: str) -> float:
     try:
-        import yfinance as yf
-        from core.api_dhan import _YF_TICKER_MAP
-        yf_sym = _YF_TICKER_MAP.get(symbol.upper(), f"{symbol}.NS")
-        df = yf.Ticker(yf_sym).history(period="1d", interval="5m", auto_adjust=True)
-        if df.empty:
+        from core.api_dhan import dhan_intraday
+        df = dhan_intraday(symbol, interval_min=5, days_back=1)
+        if df is None or df.empty:
             return 0.0
-        return float(df["Close"].iloc[-1])
+        return float(df["close"].iloc[-1])
     except Exception:
         return 0.0
 
 
 def _get_prices_batch(symbols: list) -> dict:
-    """Fetch latest price for multiple symbols in one yfinance call."""
+    """Fetch latest price for multiple symbols from Dhan (per-symbol)."""
     result = {}
     if not symbols:
         return result
-    try:
-        import yfinance as yf
-        from core.api_dhan import _YF_TICKER_MAP
-        yf_syms = [_YF_TICKER_MAP.get(s.upper(), f"{s}.NS") for s in symbols]
-        sym_map = dict(zip(yf_syms, symbols))
-        raw = yf.download(
-            tickers=" ".join(yf_syms),
-            period="1d", interval="5m",
-            auto_adjust=True, progress=False,
-            group_by="ticker",
-        )
-        if raw.empty:
-            return result
-        for yf_sym, orig_sym in sym_map.items():
-            try:
-                if len(yf_syms) == 1:
-                    col_data = raw["Close"]
-                else:
-                    col_data = raw[yf_sym]["Close"] if yf_sym in raw else None
-                if col_data is not None and not col_data.empty:
-                    result[orig_sym] = float(col_data.dropna().iloc[-1])
-            except Exception:
-                pass
-    except Exception:
-        for sym in symbols:
-            p = _get_price(sym)
-            if p > 0:
-                result[sym] = p
+    for sym in symbols:
+        p = _get_price(sym)
+        if p > 0:
+            result[sym] = p
     return result
 
 

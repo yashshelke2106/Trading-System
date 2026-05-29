@@ -66,20 +66,10 @@ class OperationsAgent(BaseAgent):
                 self.state.set(broker_healthy=True, broker_latency_ms=round(latency))
                 return
 
-            # Data API not active (DH-902 / 401) — yfinance fallback check
-            t0 = time.time()
-            try:
-                import yfinance as yf
-                df = yf.Ticker("RELIANCE.NS").history(period="1d", interval="5m")
-                latency = (time.time() - t0) * 1000
-                self._broker_latency_ms = latency
-                healthy = not df.empty
-                self.state.set(broker_healthy=healthy, broker_latency_ms=round(latency))
-                if not healthy:
-                    log.warning("[Ops/Kapito] yfinance returned empty - data degraded")
-            except Exception:
-                self.state.set(broker_healthy=False, broker_latency_ms=9999)
-                log.warning("[Ops/Kapito] both Dhan + yfinance unreachable")
+            # Dhan-only: no yfinance fallback. If Dhan data API is not active,
+            # mark degraded (don't probe yahoo).
+            self.state.set(broker_healthy=False, broker_latency_ms=9999)
+            log.warning("[Ops/Kapito] Dhan data API not active - data degraded (no yfinance fallback)")
         except Exception as e:
             self.state.set(broker_healthy=False)
             log.error(f"[Ops/Kapito] broker check failed: {e}")

@@ -98,29 +98,22 @@ def _atr_percentile(df: pd.DataFrame) -> float:
     return float((window <= cur).mean() * 100)
 
 
-# ── NIFTY fetcher (curl_cffi, bypasses SSL interception) ─────────────
+# ── NIFTY fetcher (Dhan only) ────────────────────────────────────────
 def _fetch_nifty_daily(days: int = 400) -> Optional[pd.DataFrame]:
+    """NIFTY daily OHLCV from Dhan only (index segment). Returns DataFrame
+    indexed by date with lowercase OHLCV columns, or None on failure."""
     try:
-        import yfinance as yf
-        _yf_session = None
-        try:
-            from curl_cffi import requests as cffi_requests
-            _yf_session = cffi_requests.Session(impersonate="chrome", verify=False)
-        except Exception:
-            pass
-        try:
-            tk = yf.Ticker("^NSEI", session=_yf_session) if _yf_session else yf.Ticker("^NSEI")
-        except TypeError:
-            tk = yf.Ticker("^NSEI")
-        df = tk.history(period=f"{days}d", interval="1d", auto_adjust=False)
-        if df is None or df.empty:
+        from core.api_dhan import dhan_daily
+        raw = dhan_daily("NIFTY", days_back=days)
+        if raw is None or raw.empty:
             return None
-        if hasattr(df.index, "tz") and df.index.tz is not None:
-            df.index = df.index.tz_localize(None)
+        df = raw.copy()
+        df["date"] = pd.to_datetime(df["date"])
+        df = df.set_index("date")
         df.columns = [c.lower() for c in df.columns]
         return df
     except Exception as e:
-        log.debug(f"[REGIME] NIFTY fetch failed: {e}")
+        log.debug(f"[REGIME] NIFTY Dhan fetch failed: {e}")
         return None
 
 

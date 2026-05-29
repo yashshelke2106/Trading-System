@@ -237,18 +237,11 @@ class MarketBiasEngine:
     def get_global_cue_score(self) -> Dict:
         """Pre-market global cue: US markets, DXY, crude → composite risk-on/off score."""
         try:
-            import yfinance as yf
-
-            def _pct_change(ticker: str) -> float:
-                df = yf.download(ticker, period='3d', interval='1d', progress=False, auto_adjust=True)
-                if df is None or len(df) < 2:
-                    return 0.0
-                closes = df['Close'].dropna()
-                return float((closes.iloc[-1] - closes.iloc[-2]) / closes.iloc[-2] * 100)
-
-            us_ret    = _pct_change('SPY')
-            dxy_ret   = _pct_change('DX-Y.NYB')
-            crude_ret = _pct_change('CL=F')
+            # Global pre-market cues (US/DXY/crude) are NOT available on Dhan
+            # (Indian-exchange only). yfinance permanently removed -> this cue
+            # is disabled and returns neutral. Re-enable only with a dedicated
+            # global-data provider, never yfinance.
+            us_ret = dxy_ret = crude_ret = 0.0
 
             # Composite: US market positive → risk on; strong USD → EM headwind; crude context
             composite = us_ret * 0.5 - dxy_ret * 0.3 + crude_ret * 0.1

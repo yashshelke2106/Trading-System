@@ -88,7 +88,12 @@ def _yfinance_ticker_for(symbol: str) -> str:
 
 def _fetch_yf_earnings(symbol: str) -> List[str]:
     """Return list of upcoming earnings dates (YYYY-MM-DD)."""
-    try:
+    # Dhan has no earnings-calendar endpoint and yfinance is permanently
+    # removed. Earnings-date enrichment is disabled until a dedicated
+    # fundamentals provider is wired. Returns [] (no known earnings) so the
+    # expiry/earnings gates degrade open rather than crash.
+    return []
+    try:  # dead path kept for when a real provider replaces yfinance
         import yfinance as yf
         ticker = yf.Ticker(_yfinance_ticker_for(symbol))
         dates: List[str] = []

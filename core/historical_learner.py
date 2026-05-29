@@ -31,7 +31,7 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from core.api_dhan import _yfinance_intraday, _yfinance_daily
+from core.api_dhan import dhan_intraday, dhan_daily
 from core.signal_engine import SignalEngine
 from core.universe import FO_UNIVERSE
 
@@ -65,11 +65,11 @@ def _get_engine() -> SignalEngine:
 def fetch_stock_data(symbol: str, days_back: int = 45) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """Return (df5, df15, df1d). Any may be empty on failure."""
     try:
-        df5 = _yfinance_intraday(symbol, 5,  days_back=days_back)
+        df5 = dhan_intraday(symbol, 5,  days_back=days_back)
         time.sleep(FETCH_SLEEP)
-        df15 = _yfinance_intraday(symbol, 15, days_back=days_back)
+        df15 = dhan_intraday(symbol, 15, days_back=days_back)
         time.sleep(FETCH_SLEEP)
-        df1d = _yfinance_daily(symbol, days_back=max(days_back + 15, 60))
+        df1d = dhan_daily(symbol, days_back=max(days_back + 15, 60))
         return df5, df15, df1d
     except Exception as e:
         log.warning("%s fetch failed: %s", symbol, e)

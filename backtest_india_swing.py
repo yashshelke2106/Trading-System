@@ -56,58 +56,39 @@ DEFAULT_UNIVERSE = [
 ]
 
 
-def _yf_ticker(sym: str) -> str:
-    remap = {
-        "TATAMOTORS": "TMCV.NS",
-        "MCDOWELL-N": "UNITDSPR.NS",
-        "DEEPAKNT": "DEEPAKNTR.NS",
-        "M&M": "M%26M.NS",
-        "BAJAJ-AUTO": "BAJAJ-AUTO.NS",
-    }
-    if sym in remap:
-        return remap[sym]
-    return f"{sym}.NS"
+def fetch_daily(symbol: str, days: int = DEFAULT_DAYS) -> Optional[pd.DataFrame]:
+    """Fetch daily OHLCV from Dhan only (api_dhan.dhan_daily). Returns a
+    date-indexed DataFrame with open/high/low/close/volume, or None.
 
-
-def fetch_daily(ticker: str, days: int = DEFAULT_DAYS) -> Optional[pd.DataFrame]:
-    """Fetch daily OHLCV via yfinance over curl_cffi (bypasses corporate SSL
-    interception that silently kills plain yf.download in this env)."""
+    NOTE: Dhan historical depth depends on your subscription. This sandbox
+    cannot reach Dhan (SSL interception + simulated clock) — verify on the
+    real machine. No yfinance fallback by design."""
     try:
-        import yfinance as yf
-        _yf_session = None
-        try:
-            from curl_cffi import requests as cffi_requests
-            _yf_session = cffi_requests.Session(impersonate="chrome", verify=False)
-        except Exception:
-            pass
-        try:
-            tk = yf.Ticker(ticker, session=_yf_session) if _yf_session else yf.Ticker(ticker)
-        except TypeError:
-            tk = yf.Ticker(ticker)
-        df = tk.history(period=f"{days}d", interval="1d", auto_adjust=False)
+        from core.api_dhan import dhan_daily
+        df = dhan_daily(symbol, days_back=days)
         if df is None or df.empty:
             return None
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = [c[0] if isinstance(c, tuple) else c for c in df.columns]
+        df = df.copy()
         df.columns = [c.lower() for c in df.columns]
+        if "date" in df.columns:
+            df["date"] = pd.to_datetime(df["date"])
+            df = df.set_index("date")
         if hasattr(df.index, "tz") and df.index.tz is not None:
             df.index = df.index.tz_localize(None)
         required = {"open", "high", "low", "close", "volume"}
         if not required.issubset(df.columns):
             return None
-        df = df.dropna(subset=list(required))
-        return df
+        return df.dropna(subset=list(required))
     except Exception:
         return None
 
 
 def fetch_universe(symbols: List[str], days: int = DEFAULT_DAYS) -> Dict[str, pd.DataFrame]:
-    """Bulk-fetch + map symbol → daily DataFrame."""
+    """Bulk-fetch + map symbol → daily DataFrame (Dhan only)."""
     out: Dict[str, pd.DataFrame] = {}
-    print(f"[BT] Fetching {len(symbols)} symbols + NIFTY ({days}d) from yfinance ...")
+    print(f"[BT] Fetching {len(symbols)} symbols + NIFTY ({days}d) from Dhan ...")
     for sym in symbols:
-        tkr = _yf_ticker(sym)
-        df = fetch_daily(tkr, days)
+        df = fetch_daily(sym, days)
         if df is not None and len(df) >= WARMUP_BARS + 30:
             out[sym] = df
             print(f"  {sym:14s} {len(df)} bars  {df.index[0].date()} -> {df.index[-1].date()}")
@@ -401,7 +382,7 @@ if __name__ == "__main__":
     print(f"[BT] Universe: {len(symbols)} symbols, {args.days}d history")
 
     # 1. Fetch NIFTY benchmark
-    nifty_df = fetch_daily("^NSEI", args.days)
+    nifty_df = fetch_daily("NIFTY", args.days)
     if nifty_df is None or nifty_df.empty:
         print("[BT] FATAL: NIFTY (^NSEI) data unavailable")
         sys.exit(1)

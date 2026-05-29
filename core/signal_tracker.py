@@ -205,17 +205,17 @@ def _fetch_prices(symbols: List[str]) -> Dict[str, float]:
     if not symbols:
         return prices
     try:
-        import yfinance as yf
-        tickers = [s + ".NS" for s in symbols]
-        data = yf.download(
-            tickers,
-            period="1d",
-            interval="5m",
-            group_by="ticker",
-            auto_adjust=True,
-            progress=False,
-            threads=True,
-        )
+        from core.api_dhan import dhan_intraday
+        # Dhan-only: fetch per-symbol latest close
+        for _s in symbols:
+            try:
+                _df = dhan_intraday(_s, interval_min=5, days_back=1)
+                if _df is not None and not _df.empty:
+                    prices[_s] = float(_df["close"].iloc[-1])
+            except Exception:
+                pass
+        return prices
+        data = None  # dead code below retained but unreachable
         for sym, ticker in zip(symbols, tickers):
             try:
                 if len(symbols) == 1:

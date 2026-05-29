@@ -124,12 +124,11 @@ class ReplayScanner:
             return self._daily_cache[symbol]
         # Fetch real daily data (historical, doesn't change)
         try:
-            import yfinance as yf
-            ticker = symbol if ".NS" in symbol else f"{symbol}.NS"
-            df = yf.download(ticker, period=f"{days + 5}d", interval="1d",
-                             progress=False, auto_adjust=True)
+            from core.api_dhan import dhan_daily
+            _sym = symbol.replace(".NS", "")
+            df = dhan_daily(_sym, days_back=days + 5)
             if df is not None and len(df) >= 10:
-                df = df.reset_index()
+                df = df.copy()
                 df.columns = [c.lower() for c in df.columns]
                 self._daily_cache[symbol] = df
                 return df
@@ -205,21 +204,17 @@ def fetch_replay_data(symbols: List[str], replay_date: str,
     except Exception as e:
         log.warning(f"[Replay] scanner init failed: {e}")
 
-    # Fallback to yfinance
-    start = (target - timedelta(days=5)).strftime("%Y-%m-%d")
-    end = (target + timedelta(days=1)).strftime("%Y-%m-%d")
+    # Dhan-only intraday (no yfinance)
     for sym in symbols:
         try:
-            import yfinance as yf
-            ticker = sym if ".NS" in sym else f"{sym}.NS"
-            df = yf.download(ticker, start=start, end=end,
-                             interval=f"{interval}m", progress=False,
-                             auto_adjust=True)
+            from core.api_dhan import dhan_intraday
+            _sym = sym.replace(".NS", "")
+            df = dhan_intraday(_sym, interval_min=interval, days_back=7)
             if df is None or df.empty:
                 log.warning(f"[Replay] no data for {sym}")
                 continue
 
-            df = df.reset_index()
+            df = df.copy()
             df.columns = [c.lower() for c in df.columns]
 
             # Filter to target date only

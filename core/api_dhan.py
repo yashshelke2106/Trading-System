@@ -115,131 +115,64 @@ _YF_TICKER_MAP = {
 }
 
 
-# Module-level cache: reduces yfinance hits drastically.
-# Key = (symbol, interval, days_back), Value = (timestamp, dataframe)
-_YF_CACHE: Dict = {}
-_YF_CACHE_TTL = 60  # seconds — fine for 5m bars (data only updates every 5min anyway)
-_YF_LAST_CALL = [0.0]  # global throttle: min 0.3s between requests
+# ─────────────────────────────────────────────────────────────────────────
+# DHAN-ONLY DATA ACCESS
+# yfinance was permanently removed (user has a paid Dhan Data API sub). All
+# OHLCV — intraday and daily — now comes ONLY from Dhan /charts endpoints.
+# These module-level helpers wrap a lazy DhanAPI singleton so non-API modules
+# (sector_leader, regime_filter, backtests, etc.) fetch through one path
+# instead of importing yfinance directly. Caching kept (Dhan rate-limits too).
+# ─────────────────────────────────────────────────────────────────────────
+_INTRADAY_CACHE: Dict = {}
+_INTRADAY_CACHE_TTL = 60          # seconds (5m bars refresh every 5min)
+_DAILY_CACHE: Dict = {}
+_DAILY_CACHE_TTL = 3600           # 1 hour (daily bars update once/day)
+
+_API_SINGLETON = None
 
 
-def _yfinance_intraday(symbol: str, interval_min: int, days_back: int,
-                        _retry: int = 2) -> pd.DataFrame:
-    """yfinance fallback for intraday data when Dhan Data API is unavailable.
-    Uses 60s cache + global throttle to avoid rate limits."""
+def _get_singleton():
+    """Lazy DhanAPI singleton for module-level data helpers. Built once."""
+    global _API_SINGLETON
+    if _API_SINGLETON is None:
+        _API_SINGLETON = DhanAPI()
+    return _API_SINGLETON
+
+
+def dhan_intraday(symbol: str, interval_min: int = 5, days_back: int = 5) -> pd.DataFrame:
+    """Intraday OHLCV from Dhan only. Columns: date/open/high/low/close/volume.
+    Empty DataFrame on failure (NO yfinance fallback — by design)."""
     import time as _time
-
-    cache_key = (symbol.upper(), interval_min, days_back)
-    cached = _YF_CACHE.get(cache_key)
-    if cached and (_time.time() - cached[0]) < _YF_CACHE_TTL:
+    key = (symbol.upper(), interval_min, days_back)
+    cached = _INTRADAY_CACHE.get(key)
+    if cached and (_time.time() - cached[0]) < _INTRADAY_CACHE_TTL:
         return cached[1]
-
-    # Global throttle: ensure 0.3s between any yfinance call
-    elapsed = _time.time() - _YF_LAST_CALL[0]
-    if elapsed < 0.3:
-        _time.sleep(0.3 - elapsed)
-    _YF_LAST_CALL[0] = _time.time()
-
     try:
-        import yfinance as yf
-        # yfinance modern uses curl_cffi internally; pass curl_cffi session w/ verify=False
-        # to bypass corporate SSL inspection.
-        _yf_session = None
-        try:
-            from curl_cffi import requests as cffi_requests
-            _yf_session = cffi_requests.Session(impersonate="chrome", verify=False)
-        except Exception:
-            pass
-        interval_map = {1: "1m", 5: "5m", 15: "15m", 25: "30m", 60: "60m"}
-        yf_interval = interval_map.get(interval_min, "5m")
-        yf_sym = _YF_TICKER_MAP.get(symbol.upper(), f"{symbol}.NS")
-        try:
-            ticker = yf.Ticker(yf_sym, session=_yf_session) if _yf_session else yf.Ticker(yf_sym)
-        except TypeError:
-            ticker = yf.Ticker(yf_sym)
-        period = f"{min(days_back, 60)}d"
-        df = ticker.history(period=period, interval=yf_interval, auto_adjust=True)
-        if df.empty and days_back < 60:
-            df = ticker.history(period="60d", interval=yf_interval, auto_adjust=True)
-        if df.empty:
-            _YF_CACHE[cache_key] = (_time.time(), pd.DataFrame())
-            return pd.DataFrame()
-        df = df.reset_index()
-        df.rename(columns={
-            "Datetime": "date", "Date": "date",
-            "Open": "open", "High": "high", "Low": "low",
-            "Close": "close", "Volume": "volume",
-        }, inplace=True)
-        df["date"] = pd.to_datetime(df["date"]).dt.tz_localize(None)
-        result = df[["date", "open", "high", "low", "close", "volume"]].reset_index(drop=True)
-        _YF_CACHE[cache_key] = (_time.time(), result)
-        return result
+        df = _get_singleton().get_intraday_data(symbol, interval=interval_min, days_back=days_back)
     except Exception as e:
-        err = str(e)
-        if "Too Many Requests" in err or "Rate limit" in err.lower():
-            if _retry > 0:
-                _time.sleep(5 * (3 - _retry))  # exponential backoff: 5s, 10s
-                return _yfinance_intraday(symbol, interval_min, days_back, _retry=_retry - 1)
-        import logging
-        log = logging.getLogger(__name__)
-        if "delisted" in err or "no price data" in err.lower():
-            log.debug("yfinance no data %s: %s", symbol, e)
-        else:
-            log.warning("yfinance fallback failed %s: %s", symbol, e)
-        return pd.DataFrame()
+        logging.getLogger(__name__).warning("dhan_intraday %s failed: %s", symbol, e)
+        df = pd.DataFrame()
+    df = df if isinstance(df, pd.DataFrame) else pd.DataFrame()
+    _INTRADAY_CACHE[key] = (_time.time(), df)
+    return df
 
 
-_YF_DAILY_CACHE: Dict = {}
-_YF_DAILY_CACHE_TTL = 3600  # 1 hour — daily bars only update once a day anyway
-
-
-def _yfinance_daily(symbol: str, days_back: int, _retry: int = 2) -> pd.DataFrame:
-    """yfinance fallback for daily historical data. 1-hour cache to dodge rate limits."""
+def dhan_daily(symbol: str, days_back: int = 365) -> pd.DataFrame:
+    """Daily OHLCV from Dhan only. Columns: date/open/high/low/close/volume.
+    Empty DataFrame on failure (NO yfinance fallback — by design)."""
     import time as _time
-
-    cache_key = (symbol.upper(), days_back)
-    cached = _YF_DAILY_CACHE.get(cache_key)
-    if cached and (_time.time() - cached[0]) < _YF_DAILY_CACHE_TTL:
+    key = (symbol.upper(), days_back)
+    cached = _DAILY_CACHE.get(key)
+    if cached and (_time.time() - cached[0]) < _DAILY_CACHE_TTL:
         return cached[1]
-
-    elapsed = _time.time() - _YF_LAST_CALL[0]
-    if elapsed < 0.3:
-        _time.sleep(0.3 - elapsed)
-    _YF_LAST_CALL[0] = _time.time()
-
     try:
-        import yfinance as yf
-        # yfinance requires curl_cffi session (rejects requests.Session). Mirror intraday path.
-        _yf_session = None
-        try:
-            from curl_cffi import requests as cffi_requests
-            _yf_session = cffi_requests.Session(impersonate="chrome", verify=False)
-        except Exception:
-            pass
-        yf_sym = _YF_TICKER_MAP.get(symbol.upper(), f"{symbol}.NS")
-        try:
-            tk = yf.Ticker(yf_sym, session=_yf_session) if _yf_session else yf.Ticker(yf_sym)
-        except TypeError:
-            tk = yf.Ticker(yf_sym)
-        df = tk.history(period=f"{min(days_back, 365)}d", interval="1d", auto_adjust=True)
-        if df.empty:
-            _YF_DAILY_CACHE[cache_key] = (_time.time(), pd.DataFrame())
-            return pd.DataFrame()
-        df = df.reset_index()
-        df.rename(columns={
-            "Date": "date", "Open": "open", "High": "high",
-            "Low": "low", "Close": "close", "Volume": "volume",
-        }, inplace=True)
-        df["date"] = pd.to_datetime(df["date"]).dt.tz_localize(None)
-        result = df[["date", "open", "high", "low", "close", "volume"]].reset_index(drop=True)
-        _YF_DAILY_CACHE[cache_key] = (_time.time(), result)
-        return result
+        df = _get_singleton().get_historical_data(symbol, from_date=days_back)
     except Exception as e:
-        if ("Too Many Requests" in str(e) or "Rate limit" in str(e).lower()) and _retry > 0:
-            _time.sleep(5 * (3 - _retry))
-            return _yfinance_daily(symbol, days_back, _retry=_retry - 1)
-        import logging
-        logging.getLogger(__name__).debug("yfinance daily fallback failed %s: %s", symbol, e)
-        return pd.DataFrame()
+        logging.getLogger(__name__).warning("dhan_daily %s failed: %s", symbol, e)
+        df = pd.DataFrame()
+    df = df if isinstance(df, pd.DataFrame) else pd.DataFrame()
+    _DAILY_CACHE[key] = (_time.time(), df)
+    return df
 
 
 SECURITY_ID_MAP = {
@@ -592,9 +525,9 @@ class DhanAPI:
         }
         result = self._request("POST", "/charts/historical", data, _use_data_session=True)
         df = self._parse_ohlcv(result)
-        if not df.empty:
-            return df
-        return _yfinance_daily(symbol, from_date)
+        if df.empty:
+            log.warning("Dhan historical returned no data for %s (no fallback — Dhan-only)", symbol)
+        return df
 
     def get_intraday_data(
         self, symbol: str, interval: int = 5, days_back: int = 1
@@ -603,7 +536,7 @@ class DhanAPI:
         Fetch intraday OHLCV bars via Dhan /charts/intraday.
         interval: bar size in minutes (1, 5, 15, 25, 60)
         days_back: how many past trading days to include (max 5 for 1-min, 90 for 60-min)
-        Falls back to yfinance when Dhan Data API subscription is inactive (DH-902).
+        Dhan-only — no yfinance fallback. Returns empty DataFrame on failure.
         """
         security_id = get_security_id(symbol)
         from_dt = (datetime.now() - timedelta(days=days_back)).strftime("%Y-%m-%d")
@@ -618,10 +551,9 @@ class DhanAPI:
         }
         result = self._request("POST", "/charts/intraday", data, _use_data_session=True)
         df = self._parse_ohlcv(result)
-        if not df.empty:
-            return df
-        # Dhan Data API subscription inactive or no data — fall back to yfinance
-        return _yfinance_intraday(symbol, interval, days_back)
+        if df.empty:
+            log.warning("Dhan intraday returned no data for %s (no fallback — Dhan-only)", symbol)
+        return df
 
     def get_quote(self, symbols: List[str], exchange: str = "NSE_EQ") -> Dict:
         """Fetch LTP + volume. Dhan v2 endpoint: POST /marketFeed/quote.

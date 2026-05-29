@@ -67,21 +67,14 @@ DEFAULT_UNIVERSE = [
 ]
 
 
-def _yf_ticker(sym: str) -> str:
-    remap = {
-        "TATAMOTORS": "TMCV.NS",
-        "MCDOWELL-N": "UNITDSPR.NS",
-        "DEEPAKNT": "DEEPAKNTR.NS",
-        "M&M": "M%26M.NS",
-        "BAJAJ-AUTO": "BAJAJ-AUTO.NS",
-    }
-    return remap.get(sym, f"{sym}.NS")
-
-
 def fetch_5m(symbol: str, days: int = DAYS_BACK) -> Optional[pd.DataFrame]:
-    """Use project's curl_cffi-based yfinance fetcher (bypasses SSL interception)."""
-    from core.api_dhan import _yfinance_intraday
-    df = _yfinance_intraday(symbol, 5, days)
+    """Fetch 5-minute bars from Dhan only (api_dhan.dhan_intraday).
+
+    NOTE: Dhan intraday depth depends on subscription (typically deeper than
+    yfinance's old 60d cap). This sandbox can't reach Dhan — verify on the
+    real machine. No yfinance fallback by design."""
+    from core.api_dhan import dhan_intraday
+    df = dhan_intraday(symbol, interval_min=5, days_back=days)
     if df is None or df.empty:
         return None
     df = df.copy()

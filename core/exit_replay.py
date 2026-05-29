@@ -47,19 +47,16 @@ def _fetch_bars_daily(symbol: str, start_ts: datetime, end_ts: datetime
                       ) -> Optional[pd.DataFrame]:
     """Fetch DAILY bars for the swing walk-forward window (yfinance)."""
     try:
-        import yfinance as yf
-        from core.api_dhan import _YF_TICKER_MAP
-        yf_sym = _YF_TICKER_MAP.get(symbol.upper(), f"{symbol}.NS")
-        df = yf.Ticker(yf_sym).history(
-            start=(start_ts - timedelta(days=2)).strftime('%Y-%m-%d'),
-            end=(end_ts + timedelta(days=2)).strftime('%Y-%m-%d'),
-            interval='1d', auto_adjust=True,
-        )
+        from core.api_dhan import dhan_daily
+        # Dhan-only daily window. Fetch wide then slice to [start,end].
+        _span = max((end_ts - start_ts).days + 10, 30)
+        df = dhan_daily(symbol, days_back=_span)
         if df is None or df.empty:
             return None
-        df = df.rename(columns={c: c.lower() for c in df.columns})
-        df = df.reset_index().rename(columns={'Date': 'date', 'index': 'date'})
-        df['date'] = pd.to_datetime(df['date']).dt.tz_localize(None)
+        df = df.copy()
+        df.columns = [c.lower() for c in df.columns]
+        df['date'] = pd.to_datetime(df['date']).dt.tz_localize(None) if df['date'].dt.tz is not None else pd.to_datetime(df['date'])
+        df = df[(df['date'] >= (start_ts - timedelta(days=2))) & (df['date'] <= (end_ts + timedelta(days=2)))]
         mask = (df['date'] >= start_ts - timedelta(days=2)) & \
                (df['date'] <= end_ts + timedelta(days=2))
         sub = df[mask]
@@ -99,29 +96,21 @@ def _fetch_bars(symbol: str, start_ts: datetime, end_ts: datetime
     except Exception as e:
         log.debug(f"[ExitReplay] dhan/scanner failed for {symbol}: {e}")
 
-    # yfinance fallback
+    # Dhan-only intraday fallback (no yfinance)
     try:
-        import yfinance as yf
-        from core.api_dhan import _YF_TICKER_MAP
-        yf_sym = _YF_TICKER_MAP.get(symbol.upper(), f"{symbol}.NS")
-        # yfinance 5m only goes back 60 days
-        df = yf.Ticker(yf_sym).history(
-            start=start_pad.strftime('%Y-%m-%d'),
-            end=(end_pad + timedelta(days=1)).strftime('%Y-%m-%d'),
-            interval='5m', auto_adjust=True,
-        )
+        from core.api_dhan import dhan_intraday
+        _span = max((end_pad - start_pad).days + 2, 5)
+        df = dhan_intraday(symbol, interval_min=5, days_back=_span)
         if df is None or df.empty:
             return None
-        df = df.rename(columns={c: c.lower() for c in df.columns})
-        df = df.reset_index().rename(columns={'datetime': 'date', 'Datetime': 'date'})
-        if 'date' not in df.columns and 'index' in df.columns:
-            df = df.rename(columns={'index': 'date'})
-        df['date'] = pd.to_datetime(df['date']).dt.tz_localize(None)
+        df = df.copy()
+        df.columns = [c.lower() for c in df.columns]
+        df['date'] = pd.to_datetime(df['date'])
         mask = (df['date'] >= start_pad) & (df['date'] <= end_pad)
         sub = df[mask]
         return sub.reset_index(drop=True) if len(sub) >= 1 else None
     except Exception as e:
-        log.debug(f"[ExitReplay] yfinance failed for {symbol}: {e}")
+        log.debug(f"[ExitReplay] Dhan intraday failed for {symbol}: {e}")
         return None
 
 

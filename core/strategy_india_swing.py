@@ -870,13 +870,14 @@ def scan_universe_india_swing(
         except Exception as e:
             log.debug(f"[ISW] regime gate skipped (err): {e}")
 
-    # Fetch NIFTY once for RS calc — cached per scan
+    # Fetch NIFTY once for RS calc — cached per scan (Dhan only)
     nifty_df: Optional[pd.DataFrame] = None
     try:
         if hasattr(api, "get_daily_data"):
             nifty_df = api.get_daily_data("NIFTY", days=daily_days)
-        elif hasattr(api, "_yfinance_daily"):
-            nifty_df = api._yfinance_daily("^NSEI", days=daily_days)
+        else:
+            from core.api_dhan import dhan_daily
+            nifty_df = dhan_daily("NIFTY", days_back=daily_days)
     except Exception as e:
         log.warning(f"[ISW] NIFTY fetch failed (RS gate skipped): {e}")
         nifty_df = None
@@ -886,10 +887,9 @@ def scan_universe_india_swing(
         try:
             if hasattr(api, "get_daily_data"):
                 df = api.get_daily_data(sym, days=daily_days)
-            elif hasattr(api, "_yfinance_daily"):
-                df = api._yfinance_daily(sym, days=daily_days)
             else:
-                continue
+                from core.api_dhan import dhan_daily
+                df = dhan_daily(sym, days_back=daily_days)
             if df is None or df.empty:
                 continue
             sig = generate_signal_india_swing(sym, df, nifty_df)

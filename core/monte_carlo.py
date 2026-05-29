@@ -51,8 +51,8 @@ BARS_PER_DAY = 75           # 5m bars in one NSE trading day (9:15-15:30 = 6.25h
 def _fetch_returns(symbol: str, api=None) -> Optional[np.ndarray]:
     """Fetch recent 5m log-returns for symbol. Returns array or None."""
     try:
-        from .api_dhan import _yfinance_intraday
-        df = _yfinance_intraday(symbol, 5, LOOKBACK_DAYS)
+        from .api_dhan import dhan_intraday
+        df = dhan_intraday(symbol, 5, LOOKBACK_DAYS)
         if df is None or len(df) < MIN_BARS_REQUIRED:
             # Try Dhan API
             if api:

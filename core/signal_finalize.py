@@ -125,14 +125,13 @@ def _get_market_regime() -> str:
     Trend-following signals in chop = losses. Regime filter blocks them.
     """
     try:
-        import yfinance as yf
         import numpy as np
-        nifty = yf.Ticker("^NSEI")
-        df = nifty.history(period="30d", interval="1d", auto_adjust=True)
+        from core.api_dhan import dhan_daily
+        df = dhan_daily("NIFTY", days_back=30)
         if df is None or len(df) < 21:
             return "unknown"
 
-        close = df["Close"].values
+        close = df["close"].values
         # EMA9 vs EMA21
         ema9 = _ema(close, 9)
         ema21 = _ema(close, 21)

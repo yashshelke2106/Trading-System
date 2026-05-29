@@ -43,8 +43,8 @@ MIN_BARS = 100              # minimum bars needed
 def _fetch_5m_data(symbol: str) -> Optional[pd.DataFrame]:
     """Fetch 5m OHLCV data for symbol."""
     try:
-        from core.api_dhan import _yfinance_intraday
-        df = _yfinance_intraday(symbol, 5, LOOKBACK_DAYS)
+        from core.api_dhan import dhan_intraday
+        df = dhan_intraday(symbol, 5, LOOKBACK_DAYS)
         if df is not None and len(df) >= MIN_BARS:
             return df
     except Exception as e:

@@ -64,17 +64,11 @@ def _fetch_pct_change(ticker: str) -> Optional[float]:
     if cached and now - cached[0] < _CACHE_TTL:
         return cached[1]
 
-    try:
-        import yfinance as yf
-        df = yf.download(ticker, period='3d', interval='1d', progress=False, auto_adjust=True)
-        if df is None or len(df) < 2:
-            return None
-        closes = df['Close'].dropna().values
-        pct = float((closes[-1] - closes[-2]) / closes[-2] * 100)
-        _CACHE[ticker] = (now, pct)
-        return pct
-    except Exception:
-        return None
+    # Global commodity prices (crude, metals on COMEX/NYMEX) are NOT on Dhan.
+    # yfinance permanently removed -> commodity cue disabled, returns None
+    # (callers treat None as 'not applicable'). Re-enable only with a real
+    # commodity-data feed, never yfinance.
+    return None
 
 
 if __name__ == '__main__':

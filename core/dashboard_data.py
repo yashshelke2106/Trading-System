@@ -830,24 +830,24 @@ def get_index_quotes() -> Dict[str, Dict]:
     """Fetch Nifty50, BankNifty, India VIX via yfinance intraday bars (30s cache)."""
     def loader() -> Dict[str, Dict]:
         try:
-            import yfinance as yf
-            _SYM = {"NIFTY50": "^NSEI", "BANKNIFTY": "^NSEBANK", "INDIAVIX": "^INDIAVIX"}
+            from core.api_dhan import dhan_daily
+            _SYM = {"NIFTY50": "NIFTY", "BANKNIFTY": "BANKNIFTY", "INDIAVIX": "INDIAVIX"}
             out: Dict[str, Dict] = {}
             for name, sym in _SYM.items():
                 try:
-                    df = yf.Ticker(sym).history(period="5d", interval="1d", auto_adjust=True)
-                    if df.empty:
+                    df = dhan_daily(sym, days_back=5)
+                    if df is None or df.empty:
                         out[name] = {"ltp": 0, "chg": 0, "pct": 0}
                         continue
-                    ltp  = float(df["Close"].iloc[-1])
-                    prev = float(df["Close"].iloc[-2]) if len(df) >= 2 else ltp
+                    ltp  = float(df["close"].iloc[-1])
+                    prev = float(df["close"].iloc[-2]) if len(df) >= 2 else ltp
                     chg  = ltp - prev
                     pct  = chg / prev * 100 if prev > 0 else 0.0
                     out[name] = {"ltp": round(ltp, 2), "chg": round(chg, 2), "pct": round(pct, 2)}
                 except Exception:
                     out[name] = {"ltp": 0, "chg": 0, "pct": 0}
             return out
-        except ImportError:
+        except Exception:
             return {}
     return dict(_cached("index:quotes", 30, loader))
 

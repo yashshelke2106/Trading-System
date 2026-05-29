@@ -104,11 +104,10 @@ def _fetch_sector_daily(sector_ticker: str, days: int = 60) -> Optional[pd.DataF
         return cached[1]
 
     try:
-        import yfinance as yf
-        df = yf.download(sector_ticker, period=f"{days}d", interval="1d",
-                         progress=False, auto_adjust=False)
+        from core.api_dhan import dhan_daily
+        df = dhan_daily(sector_ticker, days_back=days)
         if df is None or df.empty:
-            log.debug(f"[Sector] {sector_ticker}: yfinance empty")
+            log.debug(f"[Sector] {sector_ticker}: Dhan empty (index may be unavailable)")
             return None
         # Flatten multi-index columns if present
         if isinstance(df.columns, pd.MultiIndex):

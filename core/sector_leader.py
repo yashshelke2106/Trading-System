@@ -14,7 +14,7 @@ Logic:
   - Symbol with unknown sector → pass through (degrade gracefully).
   - 1h cache.
 
-Data via yfinance daily bars; reuses SYMBOL_TO_SECTOR map from
+Data via Dhan daily bars (api_dhan.dhan_daily); reuses SYMBOL_TO_SECTOR map from
 sector_rotation.py.
 """
 
@@ -43,59 +43,27 @@ CACHE_TTL_SEC       = 3600
 _RANK_CACHE: Dict[str, Tuple[float, List[Tuple[str, float]]]] = {}
 
 
-def _yf_ticker(sym: str) -> str:
-    """Mirror of sector_rotation._yf_ticker (kept local for fewer imports)."""
-    remap = {
-        "TATAMOTORS": "TMCV.NS",
-        "MCDOWELL-N": "UNITDSPR.NS",
-        "DEEPAKNT": "DEEPAKNTR.NS",
-    }
-    if sym in remap:
-        return remap[sym]
-    return f"{sym}.NS"
-
-
-def _curl_cffi_ticker_history(yf_sym: str, start: str, end: str):
-    """Direct yfinance fetch via curl_cffi (bypasses corporate SSL inspection
-    which silently kills plain yf.download). Returns DataFrame or None.
-    """
-    try:
-        import yfinance as yf
-        _yf_session = None
-        try:
-            from curl_cffi import requests as cffi_requests
-            _yf_session = cffi_requests.Session(impersonate="chrome", verify=False)
-        except Exception:
-            pass
-        try:
-            tk = yf.Ticker(yf_sym, session=_yf_session) if _yf_session else yf.Ticker(yf_sym)
-        except TypeError:
-            tk = yf.Ticker(yf_sym)
-        df = tk.history(start=start, end=end, interval="1d", auto_adjust=False)
-        if df is None or df.empty:
-            return None
-        if hasattr(df.index, "tz") and df.index.tz is not None:
-            df.index = df.index.tz_localize(None)
-        df.columns = [c.lower() for c in df.columns]
-        return df
-    except Exception as e:
-        log.debug(f"[SL] curl_cffi fetch failed {yf_sym}: {e}")
-        return None
-
-
 # Per-symbol full-history cache: symbol -> DataFrame (close column, datetime index)
 # Fetched ONCE at first call, reused for all as_of_date queries.
 _PRICE_CACHE: Dict[str, Optional[pd.DataFrame]] = {}
 
 
 def _get_price_history(symbol: str) -> Optional[pd.DataFrame]:
-    """Fetch and cache 3yr of daily closes for a symbol. Returns None on failure."""
+    """Fetch and cache ~3yr of daily closes for a symbol from Dhan only.
+    Returns DataFrame indexed by date (close column present) or None."""
     if symbol in _PRICE_CACHE:
         return _PRICE_CACHE[symbol]
-    yf_sym = _yf_ticker(symbol)
-    end = (pd.Timestamp.today().normalize() + pd.Timedelta(days=1)).date().isoformat()
-    start = (pd.Timestamp.today().normalize() - pd.Timedelta(days=3 * 365)).date().isoformat()
-    df = _curl_cffi_ticker_history(yf_sym, start, end)
+    df = None
+    try:
+        from core.api_dhan import dhan_daily
+        raw = dhan_daily(symbol, days_back=3 * 365)
+        if raw is not None and not raw.empty and "close" in raw.columns:
+            raw = raw.copy()
+            raw["date"] = pd.to_datetime(raw["date"])
+            df = raw.set_index("date")[["close"]]
+    except Exception as e:
+        log.debug(f"[SL] dhan_daily fetch failed {symbol}: {e}")
+        df = None
     _PRICE_CACHE[symbol] = df  # cache even None to avoid re-fetch hammering
     return df
 
