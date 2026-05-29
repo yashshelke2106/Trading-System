@@ -619,6 +619,15 @@ def generate_signal_india_swing(
         log.debug(f"[ISW] {symbol} KILL g1: {g1.get('reason')}")
         return None
 
+    # ── Longs-only mode ──────────────────────────────────────────────
+    # ONLY_LONG=1 kills all shorts. Data: short WR 12% (n=8) vs long 37% in
+    # the v1 CSV. NSE stocks grind up / crash rare+fast — short edge needs a
+    # different setup (confirmed ADX-down regime). For the single-setup
+    # pullback-continuation thesis, longs only.
+    if os.environ.get("ONLY_LONG") == "1" and direction == "short":
+        log.debug(f"[ISW] {symbol} KILL short (ONLY_LONG mode)")
+        return None
+
     # ── G0: Market regime (NIFTY) ────────────────────────────────────
     # v3: skip longs in bearish NIFTY, skip shorts in bullish NIFTY.
     g0_ok, g0 = gate0_regime(nf, direction_hint=direction)
