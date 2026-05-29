@@ -37,7 +37,7 @@ from core.strategy_india_swing import generate_signal_india_swing
 
 
 # ── Config ─────────────────────────────────────────────────────────────────
-HOLD_HORIZON_BARS = 25      # v3: was 15, winners avg 10 bars but tail extends
+HOLD_HORIZON_BARS = 12      # v4 fix#2: was 25. Losers die ~7 bars, winners ~14. Cut tail.
 COMMISSION_RT     = 0.001   # 0.1% round trip
 SLIPPAGE_SIDE     = 0.0005  # 0.05% per fill
 WARMUP_BARS       = 60      # need history for indicators
@@ -207,12 +207,12 @@ def run_backtest(universe_data: Dict[str, pd.DataFrame],
                 # Re-anchor SL/target relative to fill for honesty
                 risk = sig.entry_price - sig.sl_price
                 sl = entry_fill - risk
-                target = entry_fill + 3.0 * risk
+                target = entry_fill + 2.0 * risk   # v4 fix#2: 3R→2R, only 16/230 hit 3R
             else:
                 entry_fill = raw_fill * (1 - SLIPPAGE_SIDE)
                 risk = sig.sl_price - sig.entry_price
                 sl = entry_fill + risk
-                target = entry_fill - 3.0 * risk
+                target = entry_fill - 2.0 * risk   # v4 fix#2: 3R→2R
 
             outcome, exit_raw, hold_bars = simulate_one_signal(
                 df, fill_idx, sl, target, sig.direction, entry_price=entry_fill,
