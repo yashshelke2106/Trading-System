@@ -55,6 +55,10 @@ class RiskEngine:
         self.consecutive_losses = 0
         self.trades_today = 0
         self.last_reset = date.today()
+        # v4 fix#5: per-symbol same-day re-entry block.
+        # When a symbol hits SL, no further trades in that symbol until next session.
+        # Prevents revenge entries / chasing the same setup that just failed.
+        self.symbol_stops_today: set = set()
 
     def check_market_hours(self, force_allowed: bool = False) -> bool:
         if force_allowed:
@@ -79,13 +83,23 @@ class RiskEngine:
     def check_trades_limit(self) -> bool:
         return self.trades_today < self.config['max_trades_per_day']
 
+    def check_symbol_not_stopped(self, symbol: str) -> bool:
+        """v4 fix#5: True if symbol hasn't already hit SL this session."""
+        return symbol.upper() not in self.symbol_stops_today
+
+    def record_symbol_stop(self, symbol: str) -> None:
+        """v4 fix#5: call when a position closes via SL. Blocks re-entry for
+        the rest of the session."""
+        self.symbol_stops_today.add(symbol.upper())
+
     def _auto_reset_if_new_day(self) -> None:
         today = _now_ist().date()
         if self.last_reset != today:
             self.reset_daily()
+            self.symbol_stops_today.clear()   # v4 fix#5: fresh slate
             self.last_reset = today
 
-    def can_trade(self, force_allowed: bool = False) -> bool:
+    def can_trade(self, symbol: str = "", force_allowed: bool = False) -> bool:
         self._auto_reset_if_new_day()
         if not self.check_market_hours(force_allowed):
             return False
@@ -94,6 +108,9 @@ class RiskEngine:
         if not self.check_consecutive_losses():
             return False
         if not self.check_trades_limit():
+            return False
+        # v4 fix#5: per-symbol re-entry block (only enforced when symbol given)
+        if symbol and not self.check_symbol_not_stopped(symbol):
             return False
         return True
 

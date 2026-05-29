@@ -47,7 +47,7 @@ SESSION_END = dt_time(15, 10)   # exit 5min before close to avoid auction slippa
 
 MIN_RANGE_PCT   = 0.30
 MAX_RANGE_PCT   = 3.0
-MIN_VOLUME_MULT = 1.5
+MIN_VOLUME_MULT = 2.5   # v4 fix#4: was 1.5. Winners avg 2.78x, losers 2.36x.
 MIN_BODY_RATIO  = 0.50
 MAX_EXTENSION_PCT = 0.8
 T1_MULT = 1.0
@@ -173,43 +173,88 @@ def find_entry_bar(day_bars: pd.DataFrame, or_data: Dict) -> Optional[Dict]:
 
 def simulate_exit(day_bars: pd.DataFrame, entry_ts, entry_price: float,
                   sl: float, t1: float, t2: float, direction: str) -> Dict:
-    """Walk forward from entry bar, exit on SL / T2 / session-end."""
+    """v4 fix#3: T1 PARTIAL EXIT. When T1 hit → exit 50% at T1, move SL to
+    entry (breakeven trail) for remaining 50%. Stays in for T2 / new BE-SL
+    / session-end.
+
+    Returns:
+      outcome    : T2_FULL (both halves T2) | T1_BE (50%@T1 + 50%@BE) |
+                   T1_T2 (50%@T1 + 50%@T2) | T1_EOD (50%@T1 + 50%@EOD) |
+                   SL (no T1 hit, full SL) | EOD (no T1, EOD exit)
+      exit_price : blended exit (avg of the two halves)
+      hit_t1     : bool
+    """
     forward = day_bars[day_bars["date"] > entry_ts]
     hit_t1 = False
+    partial_exit_price: Optional[float] = None   # price where first 50% exited
+    cur_sl = sl                                  # mutable: moves to entry after T1
     last_close = entry_price
     hold_bars = 0
+
     for _, bar in forward.iterrows():
         hold_bars += 1
         hi = float(bar["high"]); lo = float(bar["low"])
         last_close = float(bar["close"])
 
-        # Hard session-end exit (independent of price)
+        # Hard session-end exit
         if bar["date"].time() >= SESSION_END:
+            if hit_t1:
+                blended = (partial_exit_price + last_close) / 2
+                return {"outcome": "T1_EOD", "exit_price": blended,
+                        "hold_bars": hold_bars, "hit_t1": True}
             return {"outcome": "EOD", "exit_price": last_close,
-                    "hold_bars": hold_bars, "hit_t1": hit_t1}
+                    "hold_bars": hold_bars, "hit_t1": False}
 
         if direction == "long":
-            # SL first (conservative — assume worst intra-bar order)
-            if lo <= sl:
-                return {"outcome": "SL", "exit_price": sl,
-                        "hold_bars": hold_bars, "hit_t1": hit_t1}
+            # SL first
+            if lo <= cur_sl:
+                if hit_t1:
+                    blended = (partial_exit_price + cur_sl) / 2
+                    return {"outcome": "T1_BE", "exit_price": blended,
+                            "hold_bars": hold_bars, "hit_t1": True}
+                return {"outcome": "SL", "exit_price": cur_sl,
+                        "hold_bars": hold_bars, "hit_t1": False}
+            # T2 next
             if hi >= t2:
-                return {"outcome": "T2", "exit_price": t2,
+                if hit_t1:
+                    blended = (partial_exit_price + t2) / 2
+                    return {"outcome": "T1_T2", "exit_price": blended,
+                            "hold_bars": hold_bars, "hit_t1": True}
+                # T2 without ever ticking T1 (gap thru) — book full T2
+                return {"outcome": "T2_FULL", "exit_price": t2,
                         "hold_bars": hold_bars, "hit_t1": True}
+            # T1 first touch → partial + breakeven trail
             if not hit_t1 and hi >= t1:
                 hit_t1 = True
-        else:
-            if hi >= sl:
-                return {"outcome": "SL", "exit_price": sl,
-                        "hold_bars": hold_bars, "hit_t1": hit_t1}
+                partial_exit_price = t1
+                cur_sl = entry_price   # breakeven trail
+        else:  # short
+            if hi >= cur_sl:
+                if hit_t1:
+                    blended = (partial_exit_price + cur_sl) / 2
+                    return {"outcome": "T1_BE", "exit_price": blended,
+                            "hold_bars": hold_bars, "hit_t1": True}
+                return {"outcome": "SL", "exit_price": cur_sl,
+                        "hold_bars": hold_bars, "hit_t1": False}
             if lo <= t2:
-                return {"outcome": "T2", "exit_price": t2,
+                if hit_t1:
+                    blended = (partial_exit_price + t2) / 2
+                    return {"outcome": "T1_T2", "exit_price": blended,
+                            "hold_bars": hold_bars, "hit_t1": True}
+                return {"outcome": "T2_FULL", "exit_price": t2,
                         "hold_bars": hold_bars, "hit_t1": True}
             if not hit_t1 and lo <= t1:
                 hit_t1 = True
-    # ran out of bars without explicit exit
+                partial_exit_price = t1
+                cur_sl = entry_price
+
+    # Ran out of bars
+    if hit_t1:
+        blended = (partial_exit_price + last_close) / 2
+        return {"outcome": "T1_EOD", "exit_price": blended,
+                "hold_bars": hold_bars, "hit_t1": True}
     return {"outcome": "EOD", "exit_price": last_close,
-            "hold_bars": hold_bars, "hit_t1": hit_t1}
+            "hold_bars": hold_bars, "hit_t1": False}
 
 
 def backtest_symbol(symbol: str, df: pd.DataFrame) -> List[Dict]:

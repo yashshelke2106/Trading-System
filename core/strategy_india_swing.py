@@ -93,6 +93,10 @@ else:
     NEAR_52W_HIGH_PENALTY        = False
     REQUIRE_REVERSAL_CANDLE      = False
 
+# Walk-forward env overrides (last word — wins over PRECISION defaults)
+VOL_MIN_X    = float(os.environ.get("WF_VOL_MIN_X", VOL_MIN_X))
+RSI_LONG_MAX = float(os.environ.get("WF_RSI_LONG_MAX", RSI_LONG_MAX))
+
 SWING_PIVOT_N         = 3
 SWING_LOOKBACK        = 20
 PULLBACK_MAX_BARS     = 5
