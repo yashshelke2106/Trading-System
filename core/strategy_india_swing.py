@@ -692,29 +692,41 @@ def generate_signal_india_swing(
         gate_results["g8_delivery"] = True
 
     # ── G9: Sector leader (top-3 long, bottom-3 short within sector) ─
-    try:
-        from core.sector_leader import check_sector_leader
-        g9_ok, g9 = check_sector_leader(symbol, direction, as_of_date=as_of_date)
-        gate_results["g9_sector_leader"] = g9_ok
-        if not g9_ok:
-            log.debug(f"[ISW] {symbol} KILL g9: {g9.get('reason')}")
-            return None
-    except Exception as e:
-        log.debug(f"[ISW] {symbol} g9 skipped (sector_leader module err): {e}")
-        g9 = {"sector_leader_skipped": True}
+    # DISABLE_G9=1 env skips entirely (used during fix-measurement passes
+    # so we compare apples-to-apples against the n=230 v3 baseline that
+    # predates G9).
+    if os.environ.get("DISABLE_G9") == "1":
         gate_results["g9_sector_leader"] = True
+        g9 = {"disabled": True}
+    else:
+        try:
+            from core.sector_leader import check_sector_leader
+            g9_ok, g9 = check_sector_leader(symbol, direction, as_of_date=as_of_date)
+            gate_results["g9_sector_leader"] = g9_ok
+            if not g9_ok:
+                log.debug(f"[ISW] {symbol} KILL g9: {g9.get('reason')}")
+                return None
+        except Exception as e:
+            log.debug(f"[ISW] {symbol} g9 skipped (sector_leader module err): {e}")
+            g9 = {"sector_leader_skipped": True}
+            gate_results["g9_sector_leader"] = True
+
+    # ── G3b: standalone-breakout hard-block ──────────────────────────
+    # v4 fix #1: breakout_5d_* present in 54% of losers (74/138 in n=230 BT).
+    # v3 only penalized -5; that was too soft. Hard-block when breakout is
+    # NOT paired with a reversal candle (engulfing/marubozu/pin).
+    if (("breakout_5d_high" in patterns or "breakout_5d_low" in patterns)
+            and not g3.get("has_reversal")):
+        log.debug(f"[ISW] {symbol} KILL standalone breakout (no reversal)")
+        return None
 
     # ── ALL GATES PASSED — build signal ──────────────────────────────
     score = 70.0
     if "bullish_marubozu" in patterns or "bearish_marubozu" in patterns:
         score += 5
-    # v3: breakout tag now penalty, not bonus. Data: 9-11% WR. -5 if standalone-ish.
+    # Breakout PAIRED with reversal = neutral (already gated above).
     if "breakout_5d_high" in patterns or "breakout_5d_low" in patterns:
-        # Only counts as positive if PAIRED with a reversal candle.
-        if g3.get("has_reversal"):
-            pass  # neutral
-        else:
-            score -= 5
+        pass  # neutral when paired (standalone already killed)
     # v3: 52WH proximity is ANTI-predictive (33% loss rate vs 12% win rate).
     # Flip bonus to penalty when precision mode on.
     if g5.get("near_52wh") and direction == "long":
@@ -753,29 +765,35 @@ def generate_signal_india_swing(
     # ── G10: ML probability filter (FINAL gate) ─────────────────────
     # Uses everything we've computed (score, RSI, RS, patterns, etc.) to
     # estimate P(win). Pass-through if model not trained yet (cold start).
+    # DISABLE_G10=1 env skips entirely (used during fix-measurement passes
+    # where G10's circular train-on-self over-filters and masks signal).
     ml_prob: Optional[float] = None
-    try:
-        from core.ml_filter import check_ml_filter
-        candidate_for_ml = {
-            "rsi": g5.get("rsi", 0.0),
-            "rs_vs_nifty": g5.get("rs_vs_nifty", 1.0) or 1.0,
-            "score": score,
-            "vol_ratio": g3.get("vol_ratio", 1.0),
-            "grade": grade,
-            "direction": direction,
-            "patterns": patterns,
-            "near_52wh": bool(g5.get("near_52wh", False)),
-            "near_52wl": bool(g5.get("near_52wl", False)),
-        }
-        g10_ok, g10 = check_ml_filter(candidate_for_ml)
-        gate_results["g10_ml"] = g10_ok
-        ml_prob = g10.get("ml_prob")
-        if not g10_ok:
-            log.debug(f"[ISW] {symbol} KILL g10: {g10.get('reason')}")
-            return None
-    except Exception as e:
-        log.debug(f"[ISW] {symbol} g10 skipped (ml_filter err): {e}")
+    if os.environ.get("DISABLE_G10") == "1":
         gate_results["g10_ml"] = True
+        g10 = {"disabled": True}
+    else:
+        try:
+            from core.ml_filter import check_ml_filter
+            candidate_for_ml = {
+                "rsi": g5.get("rsi", 0.0),
+                "rs_vs_nifty": g5.get("rs_vs_nifty", 1.0) or 1.0,
+                "score": score,
+                "vol_ratio": g3.get("vol_ratio", 1.0),
+                "grade": grade,
+                "direction": direction,
+                "patterns": patterns,
+                "near_52wh": bool(g5.get("near_52wh", False)),
+                "near_52wl": bool(g5.get("near_52wl", False)),
+            }
+            g10_ok, g10 = check_ml_filter(candidate_for_ml)
+            gate_results["g10_ml"] = g10_ok
+            ml_prob = g10.get("ml_prob")
+            if not g10_ok:
+                log.debug(f"[ISW] {symbol} KILL g10: {g10.get('reason')}")
+                return None
+        except Exception as e:
+            log.debug(f"[ISW] {symbol} g10 skipped (ml_filter err): {e}")
+            gate_results["g10_ml"] = True
 
     reason = (f"10-gate clean | trend={direction} ema20={g1['ema20']:.1f}>{g1['ema50']:.1f} "
               f"| confirm=[{','.join(patterns)}] vol={g3['vol_ratio']:.1f}x "
