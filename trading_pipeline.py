@@ -289,7 +289,13 @@ class TradingPipeline:
         
         for item in signals[:self.risk.config['max_trades_per_day']]:
             signal = item['signal']
-            
+
+            # v4 fix#5: per-symbol re-entry block. If this symbol already hit
+            # SL this session, skip — don't chase the same setup that failed.
+            if not self.risk.can_trade(symbol=signal.symbol, force_allowed=True):
+                print(f"  [SKIP] {signal.symbol}: re-entry blocked (stopped earlier today)")
+                continue
+
             vol_data = item.get('volatility', {})
             vol_risk = vol_data.get('risk_params', {}) if vol_data else {}
             

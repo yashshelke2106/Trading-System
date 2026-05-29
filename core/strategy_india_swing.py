@@ -844,6 +844,23 @@ def scan_universe_india_swing(
     `api` must expose either get_daily_data(symbol, days) or equivalent.
     Falls back gracefully if NIFTY data unavailable (RS check skipped).
     """
+    # ── Top-level regime gate (ADX/ATR) ──────────────────────────────
+    # india_swing is trend-following; it bleeds in chop. regime_filter blocks
+    # the whole scan when NIFTY ADX < 20 (no trend) or earnings cluster active.
+    # This is coarser than the per-signal G0 NIFTY-EMA gate below — it stops
+    # the scan entirely instead of filtering direction. DISABLE_REGIME_GATE=1
+    # to bypass (e.g. backtest, or to A/B the gate's contribution).
+    if os.environ.get("DISABLE_REGIME_GATE") != "1":
+        try:
+            from core.regime_filter import trade_allowed
+            ok, info = trade_allowed("india_swing")
+            if not ok:
+                log.info(f"[ISW] regime gate BLOCK — {info.get('reason')} "
+                         f"(tag={info.get('regime')} adx={info.get('adx')})")
+                return []
+        except Exception as e:
+            log.debug(f"[ISW] regime gate skipped (err): {e}")
+
     # Fetch NIFTY once for RS calc — cached per scan
     nifty_df: Optional[pd.DataFrame] = None
     try:

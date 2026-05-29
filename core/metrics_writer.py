@@ -113,7 +113,25 @@ def _pnl_pct(row: Dict) -> float:
         return 0.0
 
 
+def _is_junk(row: Dict) -> bool:
+    """Replay-failed / holiday-shifted rows have no real fill — exclude from
+    stats. extra.replay_failed is set by signal_tracker when price data was
+    missing (e.g. holiday). Including them produced the -491% DD nonsense."""
+    extra = row.get("extra") or {}
+    if isinstance(extra, dict) and extra.get("replay_failed"):
+        return True
+    return False
+
+
+def _sort_key(row: Dict):
+    ts = row.get("exit_ts") or row.get("entry_ts") or row.get("ts") or ""
+    return ts
+
+
 def _window_stats(rows: List[Dict]) -> Dict:
+    # Drop junk rows, then order by exit timestamp so cumulative equity (and
+    # therefore drawdown) is chronological — not file-append order.
+    rows = sorted((r for r in rows if not _is_junk(r)), key=_sort_key)
     n = len(rows)
     if n == 0:
         return {"signals": 0, "wr": 0.0, "pf": 0.0, "max_dd_pct": 0.0}
@@ -123,13 +141,20 @@ def _window_stats(rows: List[Dict]) -> Dict:
     gross_win = sum(_pnl_pct(r) for r in wins)
     gross_loss = abs(sum(_pnl_pct(r) for r in losses))
     pf = gross_win / max(gross_loss, 0.001)
-    # Max drawdown on cumulative pnl
-    pnls = [_pnl_pct(r) for r in rows]
-    eq = 0.0; peak = 0.0; mdd = 0.0
-    for p in pnls:
-        eq += p
-        peak = max(peak, eq)
-        mdd = min(mdd, eq - peak)
+    # Max drawdown on a FIXED-FRACTION equity curve. Raw pnl_pct is the
+    # per-trade return on premium (option leg) — those percentages do NOT add
+    # across trades (a +50% then -50% is not 0). Naive cumsum of 900 such
+    # rows produced -589% nonsense. Instead model each trade as risking a
+    # fixed 1% of equity: equity *= (1 + 0.01 * R_capped), where R_capped is
+    # the trade return clamped to a sane band (option can't lose >100%).
+    # This gives a compounding curve whose drawdown is in real equity %.
+    equity = 100.0; peak = 100.0; mdd = 0.0
+    for r in rows:
+        ret = max(-100.0, min(200.0, _pnl_pct(r)))   # clamp premium-% outliers
+        equity *= (1 + 0.01 * (ret / 100.0))         # 1% equity risk per trade
+        peak = max(peak, equity)
+        if peak > 0:
+            mdd = min(mdd, (equity - peak) / peak * 100)
     return {
         "signals": n,
         "wr": round(wr, 3),

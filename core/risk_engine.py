@@ -243,9 +243,13 @@ class RiskEngine:
         
         self.trades.append(trade)
         self.daily_pnl += pnl
-        
+
         if pnl < 0:
             self.consecutive_losses += 1
+            # v4 fix#5: SL/stop exit → block re-entry in this symbol today.
+            # Only stop-driven exits arm the block; a signal/target exit does not.
+            if reason and ("SL" in reason.upper() or "STOP" in reason.upper()):
+                self.record_symbol_stop(symbol)
         else:
             self.consecutive_losses = 0
         
