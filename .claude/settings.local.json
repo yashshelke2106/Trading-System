@@ -12,7 +12,9 @@
       "Bash(python scripts/backfill_journal.py --dry-run)",
       "Bash(python scripts/backfill_journal.py --apply)",
       "Bash(tasklist /FI \"WINDOWTITLE eq *Aladdin*\")",
-      "Bash(mkdir -p \"C:\\\\Users\\\\yashs\\\\.claude\\\\skills\\\\ema-volume-confirmation-workspace\\\\iteration-1\\\\eval-2-failed-long-diagnosis\\\\without_skill\\\\outputs\")"
+      "Bash(mkdir -p \"C:\\\\Users\\\\yashs\\\\.claude\\\\skills\\\\ema-volume-confirmation-workspace\\\\iteration-1\\\\eval-2-failed-long-diagnosis\\\\without_skill\\\\outputs\")",
+      "Read(//c/Users/yashs/.claude/skills/sensor/**)",
+      "Read(//c/Users/yashs/.claude/skills/sensor/scripts/**)"
     ]
   }
 }
