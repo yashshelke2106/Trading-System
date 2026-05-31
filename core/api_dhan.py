@@ -252,10 +252,15 @@ SECURITY_ID_MAP = {
     "FEDERALBANK":"1023",
     "IDBIBANK":   "10040",
     "BANKBARODA": "4668",
-    # ── Indices ─────────────────────────────────────────────────────────────
-    "NIFTY":     "26009",
-    "BANKNIFTY": "26000",
-    "NIFTYIT":   "22344",
+    # ── Indices (spot) — authoritative IDs from Dhan scrip_master.csv,
+    #    segment NSE/I (IDX_I), instrument INDEX. The old 26009/26000/22344
+    #    were derivative/feed IDs and returned NO historical data. ──────────
+    "NIFTY":      "13",     # Nifty 50
+    "BANKNIFTY":  "25",     # Nifty Bank
+    "FINNIFTY":   "27",     # Nifty Fin Service
+    "MIDCPNIFTY": "442",    # Nifty Midcap Select
+    "NIFTYIT":    "29",     # Nifty IT
+    "INDIAVIX":   "21",     # India VIX
     # ── Post-corporate-action aliases ────────────────────────────────────────
     "TATAMOTORS": "759782",  # post-2024 demerger TMCV entity
     "MCDOWELL-N": "10447",
@@ -500,18 +505,23 @@ class DhanAPI:
             return {"ok": False, "message": result["error"]}
         return {"ok": True, "message": f"Active — got {len(result.get('open', []))} bars"}
 
+    # Index spot symbols — must use IDX_I segment + INDEX instrument together,
+    # else Dhan returns no data (the NIFTY 0-bars bug). Keep both helpers in
+    # sync via this one set.
+    _INDEX_SYMBOLS = {"NIFTY", "BANKNIFTY", "NIFTYIT", "FINNIFTY",
+                      "MIDCPNIFTY", "INDIAVIX"}
+
     def _segment_for(self, symbol: str) -> str:
         """Return correct exchangeSegment for index vs equity.
         Dhan v2 index segment is 'IDX_I' (confirmed against the official
         dhanhq SDK constant INDEX='IDX_I'); 'NSE_IDX' was wrong and would
         DH-905 every index chart request."""
-        if symbol.upper() in ("NIFTY", "BANKNIFTY", "NIFTYIT", "FINNIFTY",
-                               "MIDCPNIFTY"):
+        if symbol.upper() in self._INDEX_SYMBOLS:
             return "IDX_I"
         return "NSE_EQ"
 
     def _instrument_for(self, symbol: str) -> str:
-        if symbol.upper() in ("NIFTY", "BANKNIFTY", "NIFTYIT"):
+        if symbol.upper() in self._INDEX_SYMBOLS:
             return "INDEX"
         return "EQUITY"
 
