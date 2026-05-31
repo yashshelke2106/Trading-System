@@ -13,6 +13,40 @@ The one setup the data backs. Everything else is OFF.
 5. **Regime gate** — scan skips entirely when NIFTY ADX < 20 (chop) or earnings cluster (`core/regime_filter.py`)
 6. **Risk** — SL below pullback swing low (tight ~1-1.5%), target 2R, breakeven trail at 0.7R
 7. **Re-entry block** — a symbol that hit SL today is locked out till next session
+8. **Instrument: stock FUTURES, not options** (`INSTRUMENT_MODE=futures`)
+9. **Universe filter** — block stocks where the setup is a proven spot loser
+
+## Instrument: why futures, not options
+
+The backtested edge (PF 1.17) was measured on **spot prices**. The first 16
+live days traded **options**, and the journal (911 trades) shows the
+mismatch tax:
+
+| Outcome | SPOT moved | OPTION premium did |
+|---------|-----------|--------------------|
+| SL_HIT  | -0.60% (median) | **-9.56%** |
+| TARGET  | +0.66% | +21.67% |
+
+On stop-losses the stock barely moved — the **option premium** decayed
+(theta + IV crush + spread). **15% of trades had the direction RIGHT yet the
+option still lost.** And per-symbol, names that looked like losers on options
+were winners on spot (PAYTM option 2/10 → spot 10/10; PFC 1/9 → spot
+positive every time).
+
+Conclusion: the edge is in price direction; options pollute it. Stock
+**futures** (delta ~1, no theta decay, tight spread on liquid names) express
+the same view cleanly. `INSTRUMENT_MODE=futures` is now the default; the
+scanner attaches a futures leg (lot size, spot-level entry/SL/target) and
+skips option-chain enrichment entirely.
+
+## Universe filter
+
+`core/universe_filter.py` ranks every F&O symbol by how the setup performed
+on its **spot** move in the journal. Chronic spot losers are blocked
+(currently NHPC, NAVINFLUOR, NATIONALUM — negative expectancy over n>=5);
+untested symbols pass (innocent until proven). One strategy, filtered
+universe — NOT a per-stock strategy (that overfits). Rebuild with
+`python -m core.universe_filter`.
 
 ## Why this and nothing else
 

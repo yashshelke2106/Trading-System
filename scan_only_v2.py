@@ -175,8 +175,48 @@ def _scan(engine, api, top_n, universe=None, orb_only=False, vol_only=False):
     # Only F&O-tradeable signals survive.
     enriched = []
     dropped_no_chain = []
+    _instrument_mode = getattr(config, "INSTRUMENT_MODE", "futures")
     for s in sigs:
         try:
+            # ── UNIVERSE FILTER ──────────────────────────────────────────
+            # Block stocks where this setup is a proven loser on SPOT (the
+            # real price move, not option premium). Untested symbols pass.
+            try:
+                from core.universe_filter import is_tradeable
+                _ok, _uinfo = is_tradeable(s["symbol"])
+                if not _ok:
+                    dropped_no_chain.append(s["symbol"] + f"(universe:{_uinfo.get('reason')})")
+                    continue
+            except Exception:
+                pass
+
+            # ── FUTURES MODE ─────────────────────────────────────────────
+            # Express the directional view through the stock FUTURE — no
+            # option chain, strike, theta or IV. The backtested edge (PF 1.17)
+            # is a SPOT edge; futures carry it without premium-decay tax.
+            if _instrument_mode == "futures":
+                from core.futures_leg import attach_futures_leg
+                fs = attach_futures_leg(s)
+                if fs is None:
+                    dropped_no_chain.append(s["symbol"] + "(fut_leg_fail)")
+                    continue
+                # Entry guard still applies (RSI extremes, dead vol, VWAP, etc.)
+                if fs.get("strategy") not in ("STRADDLE", "STRANGLE", "ORB"):
+                    try:
+                        from core.entry_guard import check_entry
+                        _g_ok, _g_reason = check_entry(fs)
+                        if not _g_ok:
+                            dropped_no_chain.append(s["symbol"] + f"(guard:{_g_reason})")
+                            continue
+                    except Exception:
+                        pass
+                enriched.append(fs)
+                try:
+                    record_signal(fs)
+                except Exception:
+                    pass
+                continue  # skip all option-chain enrichment below
+
             # PRE-CHAIN EXPIRY GATE: skip symbols whose nearest expiry is today.
             # Saves an NSE API call and short-circuits before chain-derived expiry
             # can leak through. Uses calendar truth (holiday-shift-aware).

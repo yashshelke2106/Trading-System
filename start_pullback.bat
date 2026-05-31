@@ -19,6 +19,10 @@ REM                      for backtest apples-to-apples).
 set ONLY_LONG=1
 set PRECISION_MODE=0
 set PAPER_TRADE=1
+REM Instrument: stock FUTURES, not options. 16-day journal proof — on SL hits
+REM spot moved only -0.6%% but option premium lost -9.56%% (theta/IV/spread).
+REM Futures carry the spot edge (PF 1.17) without the premium-decay tax.
+set INSTRUMENT_MODE=futures
 
 REM Kill stale ports
 for /f "tokens=5" %%a in ('netstat -aon ^| find ":8000" ^| find "LISTENING"') do taskkill /PID %%a /F >nul 2>&1
