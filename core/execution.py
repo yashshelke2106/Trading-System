@@ -54,14 +54,18 @@ class ExecutionEngine:
     def place_order(self, symbol: str, direction: str, quantity: int,
                   order_type: str = "LIMIT", price: float = None,
                   is_option: bool = False, option_strike: float = None,
-                  option_type: str = None) -> OrderResult:
-        
+                  option_type: str = None, is_futures: bool = False) -> OrderResult:
+
         for attempt in range(self.config['retry_attempts']):
             try:
                 if is_option:
                     order_result = self._execute_option_order(
                         symbol, direction, quantity, order_type, price,
                         option_strike, option_type
+                    )
+                elif is_futures:
+                    order_result = self._execute_futures_order(
+                        symbol, direction, quantity, order_type, price
                     )
                 else:
                     order_result = self._execute_equity_order(
@@ -195,6 +199,68 @@ class ExecutionEngine:
             retry_count=1
         )
 
+    def _execute_futures_order(self, symbol: str, direction: str, quantity: int,
+                               order_type: str, price: float) -> OrderResult:
+        """Place a STOCK FUTURES order.
+
+        Unlike options, the future is delta~1 with no theta/IV — direction maps
+        straight to BUY/SELL. Quantity is already a lot multiple from the
+        futures leg. Live path uses Dhan NSE_FNO segment + the current-month
+        futures trading symbol + MARGIN product type.
+        """
+        _tx = {"long": "BUY", "short": "SELL"}.get(direction.lower(), direction.upper())
+
+        # PAPER / MOCK: simulate the fill (no real order)
+        if config.USE_MOCK_DATA or getattr(config, 'PAPER_TRADE', False) or not self.dhan_api:
+            filled_price = price or 0
+            mode = "PAPER" if getattr(config, 'PAPER_TRADE', False) and not config.USE_MOCK_DATA else "MOCK"
+            return OrderResult(
+                success=True,
+                order_id=self.generate_order_id(),
+                filled_price=filled_price,
+                filled_quantity=quantity,
+                message=f"[{mode}] {_tx} {quantity} {symbol}-FUT @ {filled_price}",
+                retry_count=0,
+            )
+
+        # LIVE: real Dhan futures order
+        if self.dhan_api:
+            try:
+                expiry = self._next_nse_expiry(symbol)
+                fut_symbol = f"{symbol}{expiry}FUT"
+                result = self.dhan_api.place_order(
+                    symbol=fut_symbol,
+                    exchange="NSE_FNO",          # stock futures segment
+                    transaction_type=_tx,
+                    quantity=quantity,
+                    order_type=order_type.upper(),
+                    price=price,
+                    product_type="MARGIN",       # carry-forward futures (not INTRADAY)
+                )
+                oid = result.get("orderId") or result.get("order_id")
+                if oid:
+                    filled_price = (result.get("tradedPrice") or result.get("traded_price")
+                                    or result.get("price") or price)
+                    return OrderResult(
+                        success=True,
+                        order_id=str(oid),
+                        filled_price=filled_price,
+                        filled_quantity=quantity,
+                        message=f"{_tx} {quantity} {fut_symbol} @ {filled_price}",
+                        retry_count=0,
+                    )
+            except Exception as e:
+                print(f"[ERROR] Futures order API call failed for {symbol}: {e}")
+
+        return OrderResult(
+            success=False,
+            order_id=self.generate_order_id(),
+            filled_price=0,
+            filled_quantity=0,
+            message="Futures order failed",
+            retry_count=1,
+        )
+
     @staticmethod
     def _next_nse_expiry(symbol: str = "") -> str:
         """Return nearest NSE F&O expiry as DDMONYY string, holiday-adjusted."""
@@ -211,10 +277,15 @@ class ExecutionEngine:
 
     def execute_trade(self, symbol: str, direction: str, capital: float,
                    entry_price: float, atr: float, strike: Optional[StrikeRecommendation] = None,
-                   use_options: bool = False,
+                   use_options: bool = False, use_futures: bool = None,
                    entry_volume: float = 0.0, entry_vol_avg: float = 0.0) -> Optional[OrderResult]:
         if use_options and strike is None:
             return None
+        # Default instrument from config when caller doesn't specify. Futures is
+        # the default expression of a directional swing (no theta/IV tax).
+        if use_futures is None:
+            use_futures = (getattr(config, "INSTRUMENT_MODE", "futures") == "futures"
+                           and not use_options)
         # ATR-based SL (adapts to stock volatility); fallback to % if ATR unavailable
         if atr and atr > 0:
             atr_mult = config.SIGNAL_CONFIG.get('atr_multiplier', 1.5)
@@ -233,6 +304,13 @@ class ExecutionEngine:
             option_type = strike.option_type
             entry_with_slip = entry_price
             premium = strike.premium
+        elif use_futures:
+            # Trade in lot multiples; risk-based lots if available, else 1 lot.
+            quantity = self._calculate_futures_quantity(capital, entry_price, sl_price, symbol)
+            option_strike = None
+            option_type = None
+            entry_with_slip = self.calculate_slippage(entry_price, direction)
+            premium = 0
         else:
             quantity = self.risk.calculate_quantity(capital, entry_price, sl_price, symbol=symbol)
             option_strike = None
@@ -270,6 +348,11 @@ class ExecutionEngine:
                 symbol, direction, quantity, order_type, strike.premium,
                 is_option=True, option_strike=option_strike, option_type=option_type
             )
+        elif use_futures:
+            result = self.place_order(
+                symbol, direction, quantity, order_type, entry_with_slip,
+                is_futures=True
+            )
         else:
             result = self.place_order(
                 symbol, direction, quantity, order_type, entry_with_slip
@@ -279,6 +362,27 @@ class ExecutionEngine:
             self.risk.open_position(position, force_allowed=True)
 
         return result
+
+    def _calculate_futures_quantity(self, capital: float, entry: float,
+                                    sl: float, symbol: str = '') -> int:
+        """Lots of stock futures sized by fixed-fractional risk.
+
+        Risk a constant % of capital per trade (RISK_CONFIG.max_risk_per_trade).
+        lots = floor( (capital * risk%) / (per-unit risk * lot_size) ), min 1 lot.
+        This gives EVEN rupee risk per trade instead of a flat 1-lot everywhere.
+        """
+        lot_size = int(getattr(config, 'NSE_LOT_SIZES', {}).get(symbol.upper(), 1))
+        lot_size = max(lot_size, 1)
+        risk_per_unit = abs(entry - sl)
+        if risk_per_unit <= 0:
+            return lot_size  # 1 lot fallback
+        risk_pct = config.RISK_CONFIG.get('max_risk_per_trade', 0.01)
+        risk_budget = capital * risk_pct
+        risk_per_lot = risk_per_unit * lot_size
+        if risk_per_lot <= 0:
+            return lot_size
+        lots = int(risk_budget // risk_per_lot)
+        return max(1, lots) * lot_size
 
     def _calculate_option_quantity(self, capital: float, premium: float,
                                     symbol: str = '') -> int:

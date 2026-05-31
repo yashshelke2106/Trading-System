@@ -156,19 +156,38 @@ def _check_outcomes(tracked: dict) -> list:
         sl     = t["sl"]
         target = t["target"]
 
+        # ── Breakeven trail at 0.7R (match backtest exit logic) ──────────
+        # Once price moves 0.7R in favour, ratchet the stop to entry. This is
+        # exactly what backtest_india_swing.simulate_one_signal does, so the
+        # forward results are comparable to the PF 1.17 backtest. A stop that
+        # fires AFTER the move is a BE_STOP (scratch), not a full LOSS.
+        sl0 = float(t.get("sl0", sl))          # original stop (immutable)
+        t.setdefault("sl0", sl0)
+        eff_sl = float(t.get("sl_eff", sl0))   # current (possibly trailed) stop
+        init_risk = abs(entry - sl0)
+        if init_risk > 0 and not t.get("be_moved"):
+            be_threshold = entry + 0.7 * init_risk if lng else entry - 0.7 * init_risk
+            reached = (cur >= be_threshold) if lng else (cur <= be_threshold)
+            if reached:
+                eff_sl = entry
+                t["sl_eff"] = entry
+                t["be_moved"] = True
+
         outcome    = None
         exit_price = cur
 
         if lng:
             if cur >= target:
                 outcome = "WIN"
-            elif cur <= sl:
-                outcome = "LOSS"
+            elif cur <= eff_sl:
+                outcome = "BE_STOP" if t.get("be_moved") else "LOSS"
+                exit_price = eff_sl
         else:
             if cur <= target:
                 outcome = "WIN"
-            elif cur >= sl:
-                outcome = "LOSS"
+            elif cur >= eff_sl:
+                outcome = "BE_STOP" if t.get("be_moved") else "LOSS"
+                exit_price = eff_sl
 
         if outcome is None and eod and t.get("signal_date") == str(date.today()):
             outcome = "TIMEOUT"

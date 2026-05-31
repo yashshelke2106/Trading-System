@@ -94,7 +94,12 @@ def _classify(row: Dict) -> str:
     out = (row.get("outcome") or row.get("status") or "").upper()
     if out in ("WIN", "TARGET", "T1", "T2"):
         return "WIN"
-    if out in ("LOSS", "SL", "STOP", "BE_STOP"):
+    # BE_STOP = breakeven scratch (stop ratcheted to entry, exited ~flat).
+    # The backtest counts it as neither win nor loss; mirror that as TIMEOUT
+    # so WR/PF aren't penalised for a saved trade.
+    if out == "BE_STOP":
+        return "TIMEOUT"
+    if out in ("LOSS", "SL", "STOP"):
         return "LOSS"
     # Ambiguous tag → use pnl sign
     pnl = _pnl_pct(row)
