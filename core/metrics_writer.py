@@ -257,6 +257,21 @@ def write_metrics(as_of: Optional[date] = None, force: bool = False) -> Dict:
     LOG_DIR.mkdir(exist_ok=True)
     with open(METRICS_FILE, "a") as f:
         f.write(json.dumps(record) + "\n")
+
+    # Alert on drift / redesign so a degrading system doesn't go unnoticed.
+    try:
+        from core.health import alert
+        if drift:
+            alert("DRIFT",
+                  f"⚠️ DRIFT {today.isoformat()} — 30d PF {r30.get('pf')} "
+                  f"DD {r30.get('max_dd_pct')}%. Review before next session.")
+        if redesign:
+            alert("REDESIGN",
+                  f"🛑 REDESIGN {today.isoformat()} — 60+ days of 90d WR "
+                  f"{r90.get('wr')} below {REDESIGN_WR_90D_MIN:.0%}. Edge gone.")
+    except Exception:
+        pass
+
     return record
 
 

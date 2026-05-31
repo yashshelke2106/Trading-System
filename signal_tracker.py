@@ -18,6 +18,11 @@ from datetime import datetime, date
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+try:
+    import config
+except Exception:
+    config = None
+
 LOG_DIR       = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
 SIGNALS_FILE  = os.path.join(LOG_DIR, "signals.json")
 TRACKED_FILE  = os.path.join(LOG_DIR, "tracked_signals.json")
@@ -195,7 +200,14 @@ def _check_outcomes(tracked: dict) -> list:
         if outcome is None:
             continue
 
-        pnl_pct = ((exit_price - entry) / entry * 100) if lng else ((entry - exit_price) / entry * 100)
+        gross_pct = ((exit_price - entry) / entry * 100) if lng else ((entry - exit_price) / entry * 100)
+        # Subtract realistic round-trip cost so the journal P&L is NET, not a
+        # fantasy gross. Futures all-in (STT sell-side + exchange txn + GST +
+        # stamp + SEBI + brokerage) plus half-spread slippage each way is
+        # ~0.06% of notional round-trip on liquid names. Configurable via
+        # config.FUT_COST_ROUNDTRIP_PCT. Metrics built on this are honest.
+        cost_pct = float(getattr(config, "FUT_COST_ROUNDTRIP_PCT", 0.06))
+        pnl_pct = gross_pct - cost_pct
 
         record = {
             "ts_signal":    t["ts_signal"],
@@ -211,6 +223,9 @@ def _check_outcomes(tracked: dict) -> list:
             "patterns":     t.get("patterns", []),
             "reason":       t.get("reason", ""),
             "outcome":      outcome,
+            "instrument":   t.get("instrument", "FUT"),
+            "gross_pct":    round(gross_pct, 3),
+            "cost_pct":     round(cost_pct, 3),
             "pnl_pct":      round(pnl_pct, 3),
         }
         _append_journal(record)

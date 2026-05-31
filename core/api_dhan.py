@@ -130,6 +130,25 @@ _DAILY_CACHE_TTL = 3600           # 1 hour (daily bars update once/day)
 
 _API_SINGLETON = None
 
+# Data-staleness tracking: timestamp of the last NON-EMPTY Dhan fetch. With
+# yfinance gone, Dhan is the single source — if it goes silent mid-session we
+# must HALT (not trade blind). seconds_since_last_data() lets the scanner gate.
+_LAST_OK_FETCH = [0.0]
+
+
+def _mark_data_ok():
+    import time as _t
+    _LAST_OK_FETCH[0] = _t.time()
+
+
+def seconds_since_last_data() -> float:
+    """Seconds since the last non-empty Dhan fetch. Large = data stale/dead.
+    Returns a big number if nothing has ever been fetched."""
+    import time as _t
+    if _LAST_OK_FETCH[0] <= 0:
+        return 1e9
+    return _t.time() - _LAST_OK_FETCH[0]
+
 
 def _get_singleton():
     """Lazy DhanAPI singleton for module-level data helpers. Built once."""
@@ -153,6 +172,8 @@ def dhan_intraday(symbol: str, interval_min: int = 5, days_back: int = 5) -> pd.
         logging.getLogger(__name__).warning("dhan_intraday %s failed: %s", symbol, e)
         df = pd.DataFrame()
     df = df if isinstance(df, pd.DataFrame) else pd.DataFrame()
+    if not df.empty:
+        _mark_data_ok()
     _INTRADAY_CACHE[key] = (_time.time(), df)
     return df
 
@@ -171,6 +192,8 @@ def dhan_daily(symbol: str, days_back: int = 365) -> pd.DataFrame:
         logging.getLogger(__name__).warning("dhan_daily %s failed: %s", symbol, e)
         df = pd.DataFrame()
     df = df if isinstance(df, pd.DataFrame) else pd.DataFrame()
+    if not df.empty:
+        _mark_data_ok()
     _DAILY_CACHE[key] = (_time.time(), df)
     return df
 

@@ -489,6 +489,18 @@ def _scan(engine, api, top_n, universe=None, orb_only=False, vol_only=False):
             size_mult = min(size_mult * 1.5, 1.0)
         s["size_mult"] = round(size_mult, 2)
 
+    # ── DATA-STALE HALT ──────────────────────────────────────────────────
+    # Dhan is the only source now. If this whole cycle got no fresh bars, do
+    # NOT publish signals (they'd be built on stale/empty data) — alert + skip
+    # the write. The first cycle after startup is exempt (cold cache).
+    try:
+        from core.health import check_data_or_alert
+        if _scan_count >= 1 and not check_data_or_alert():
+            print(f'[{ts}] DATA STALE — skipping signal publish this cycle (alert sent).')
+            return
+    except Exception:
+        pass
+
     # Write enriched signals (option fields now present for UI)
     write_signals(sigs, meta={"elapsed_sec": elapsed, "universe_size": len(universe)})
 
