@@ -374,12 +374,26 @@ if __name__ == "__main__":
     p = argparse.ArgumentParser()
     p.add_argument("--days", type=int, default=DEFAULT_DAYS,
                    help="Historical lookback in calendar days")
-    p.add_argument("--limit", type=int, default=len(DEFAULT_UNIVERSE),
-                   help="Cap universe size for quicker runs")
+    p.add_argument("--limit", type=int, default=None,
+                   help="Cap universe size for quicker runs (default: no cap)")
+    p.add_argument("--full", action="store_true",
+                   help="Use the full ~150-name F&O universe (core/universe.py) "
+                        "for a statistically meaningful sample instead of the 30 defaults")
     args = p.parse_args()
 
-    symbols = DEFAULT_UNIVERSE[:args.limit]
-    print(f"[BT] Universe: {len(symbols)} symbols, {args.days}d history")
+    if args.full:
+        try:
+            from core.universe import FO_UNIVERSE as _FULL
+            base_universe = list(dict.fromkeys(_FULL))  # de-dupe, keep order
+        except Exception as e:
+            print(f"[BT] --full failed to load core.universe ({e}); using defaults")
+            base_universe = DEFAULT_UNIVERSE
+    else:
+        base_universe = DEFAULT_UNIVERSE
+
+    symbols = base_universe[:args.limit] if args.limit else base_universe
+    print(f"[BT] Universe: {len(symbols)} symbols, {args.days}d history"
+          f"{' (FULL F&O)' if args.full else ''}")
 
     # 1. Fetch NIFTY benchmark
     nifty_df = fetch_daily("NIFTY", args.days)
