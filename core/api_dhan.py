@@ -182,6 +182,12 @@ def dhan_daily(symbol: str, days_back: int = 365) -> pd.DataFrame:
     """Daily OHLCV from Dhan only. Columns: date/open/high/low/close/volume.
     Empty DataFrame on failure (NO yfinance fallback — by design)."""
     import time as _time
+    # Yahoo-style index tickers (^NSEI, ^CNXIT, ...) are never valid Dhan
+    # symbols — some legacy callers (sector_rotation) still pass them. Skip
+    # quietly instead of spamming "no data" warnings; caller degrades neutral.
+    if symbol.startswith("^"):
+        logging.getLogger(__name__).debug("dhan_daily: skipping yahoo ticker %s", symbol)
+        return pd.DataFrame()
     key = (symbol.upper(), days_back)
     cached = _DAILY_CACHE.get(key)
     if cached and (_time.time() - cached[0]) < _DAILY_CACHE_TTL:

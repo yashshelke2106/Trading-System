@@ -40,6 +40,8 @@ if "%PREFLIGHT_CODE%"=="0" (
         set DISABLE_REGIME_GATE=1
         where py >nul 2>&1
         if %errorlevel%==0 ( py backtest_india_swing.py ) else ( python backtest_india_swing.py )
+        echo.
+        echo  Backtest done — read the RESULTS block above ^(Profit factor / Total trades^).
     )
 ) else (
     echo  PREFLIGHT FAILED. Dhan data not flowing — see hints above.
