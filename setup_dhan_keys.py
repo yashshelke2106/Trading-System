@@ -56,11 +56,12 @@ api = DhanAPI()
 result = api.test_data_api()
 if result["ok"]:
     print(f"  Data API OK — {result['message']}")
-    print("\n  SUCCESS. Dhan live data active. yfinance fallback no longer needed.")
-    print("  Set USE_MOCK_DATA=False in config.py (already False — you're ready).")
+    print("\n  SUCCESS. Dhan live data active. Dhan is the ONLY data source.")
+    print("  Verify bars:  python -c \"from core.api_dhan import dhan_daily; print(dhan_daily('RELIANCE',30).tail())\"")
 else:
     print(f"  Data API FAIL — {result['message']}")
     print("  Check: subscription active at dhan.co/api → Data APIs section.")
-    print("  yfinance fallback still active until fixed.")
+    print("  NOTE: yfinance was permanently removed — there is NO fallback.")
+    print("  Data calls return empty until Dhan works. Fix before trading.")
 
 print()
