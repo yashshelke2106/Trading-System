@@ -203,13 +203,19 @@ def main():
         def fmt(x):
             return (f"{x['n']:>5} {x['mean_m']:>+6.2f}% {x['pos']:>4.0f}% {x['ann']:>+5.1f}% {x['t']:>5.2f}"
                     if x else f"{'-':>5} {'-':>7} {'-':>5} {'-':>6} {'-':>5}")
+        # A real edge needs STATISTICAL SIGNIFICANCE out-of-sample, not just a
+        # mean barely above zero. Require OOS t>=2 (solid) AND IS t>=1 for EDGE.
+        # Positive-but-insignificant (|t|<1.5) = noise, labelled honestly.
         verdict = "thin"
         if si and so and si["n"] >= 6 and so["n"] >= 6:
-            if si["mean_m"] > 0 and so["mean_m"] > 0:
-                verdict = ">>> EDGE (alpha both halves)"
-                if so["t"] >= 1.5: verdict = ">>> STRONG EDGE (alpha both, t>1.5)"
-            elif si["mean_m"] > 0.3 and so["mean_m"] <= 0:
+            if so["t"] >= 2.0 and si["t"] >= 1.0 and si["mean_m"] > 0 and so["mean_m"] > 0:
+                verdict = ">>> REAL EDGE (OOS t>=2, both +)"
+            elif so["t"] >= 1.5 and si["mean_m"] > 0:
+                verdict = "suggestive (OOS t>=1.5)"
+            elif si["mean_m"] > 0.3 and so["t"] < 0.5:
                 verdict = "fades OOS"
+            elif so["mean_m"] > 0 and so["t"] < 1.0:
+                verdict = "noise (+ but insignificant)"
             else:
                 verdict = "no alpha"
         print(f"{fac:10} | {fmt(si)} | {fmt(so)} | {verdict}")
