@@ -153,7 +153,8 @@ def summ(periods):
     ex = np.array([e for _, e in periods])
     pos = (ex > 0).mean() * 100
     mean_m = ex.mean() * 100
-    ann = ((1 + ex.mean()) ** 12 - 1) * 100   # ~12 rebalances/yr
+    per_yr = globals().get("ANN_PER_YEAR", 12)
+    ann = ((1 + ex.mean()) ** per_yr - 1) * 100   # rebalances/yr (12 monthly, 52 weekly)
     t_stat = ex.mean() / (ex.std() / np.sqrt(len(ex))) if ex.std() > 0 else 0
     return {"n": len(ex), "mean_m": mean_m, "pos": pos, "ann": ann, "t": t_stat}
 
@@ -163,8 +164,16 @@ def main():
     ap.add_argument("--full", action="store_true")
     ap.add_argument("--days", type=int, default=DAYS,
                     help="History lookback in calendar days (more = more rebalances = real power)")
+    ap.add_argument("--rebal", type=int, default=REBAL,
+                    help="Rebalance/hold period in trading days. Use 5 (weekly) to test "
+                         "short-term reversal at its natural horizon (more obs = more power).")
+    ap.add_argument("--ann", type=int, default=12,
+                    help="Rebalances per year for annualisation (12 monthly, 52 weekly)")
     args = ap.parse_args()
     globals()["DAYS"] = args.days
+    globals()["REBAL"] = args.rebal
+    globals()["HOLD"] = args.rebal
+    globals()["ANN_PER_YEAR"] = args.ann
     if args.full:
         try:
             from core.universe import FO_UNIVERSE
