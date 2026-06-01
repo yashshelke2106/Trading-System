@@ -48,7 +48,10 @@ logging.getLogger("core.api_dhan").setLevel(logging.CRITICAL)
 import numpy as np
 import pandas as pd
 
-DAYS = 730
+DAYS = 2600           # ~7 calendar years — a monthly factor needs MANY rebalances
+                      # to be testable (2yr = only ~11, statistically meaningless).
+                      # Override with --days. Dhan returns whatever history your
+                      # plan allows; more bars = more rebalances = real power.
 REBAL = 21            # trading-day rebalance (~monthly)
 HOLD = 21            # holding period = rebalance
 TOP_QUANTILE = 0.20   # long top 20%
@@ -158,7 +161,10 @@ def summ(periods):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--full", action="store_true")
+    ap.add_argument("--days", type=int, default=DAYS,
+                    help="History lookback in calendar days (more = more rebalances = real power)")
     args = ap.parse_args()
+    globals()["DAYS"] = args.days
     if args.full:
         try:
             from core.universe import FO_UNIVERSE
