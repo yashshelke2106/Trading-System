@@ -72,15 +72,42 @@ Still NOT acted on (single-sample / weak): grade S marginal +3pt for longs in
 the backtest but worst in the journal → net non-predictive, kept out of sizing;
 short-side score/grade quirks (n too small).
 
-## Bottom line
+## Round 3 — the full-universe verdict (and it overturned Round 2)
 
-Removed/fixed what the data proves wrong across BOTH samples:
-- **grade-based sizing** that amplified the worst trades → R:R sizing
-- **breakout-chase loss-magnets** → added to kill-list
-- **overbought long entries** (RSI 60+) → ceiling cut to 60
-- **lone wicky pin-bar longs** → require volume backing
+Ran the decisive test: **152-stock, 2-year, real-Dhan** backtest (146 long
+trades), then `analyze_factors.py` on it. This is the largest, freshest,
+multi-regime sample we have — it outranks the 30-stock and 1-month samples.
 
-Added a **reusable analyzer** so every future cut/add is data-backed and
-re-checkable. The decisive next test stays the **full-universe 2yr backtest**
-on real Dhan data, then `analyze_factors.py --csv` on it to confirm these
-hold on the freshest data before any capital.
+**Strategy result: WR 23%, PF 0.72, expectancy -0.12R.** No edge.
+
+**It DISPROVED the Round-2 tunes — which were small-sample curve-fits:**
+
+| Round-2 claim (30 stocks) | Round-3 reality (152 stocks) | Action |
+|---|---|---|
+| RSI 50-60 = 55% WR → cut ceiling to 60 | RSI 50-60 = **26%**, 60-70 = 23%, 70+ = 25% — flat, no edge | **REVERTED** RSI_LONG_MAX to 65 |
+| pin-bar 27% (worst) → demote | pin-bar **29% (best)**, marubozu **21% (worst)** — opposite | **REVERTED** the pin-bar volume gate |
+
+Lesson logged honestly: within-direction discipline + journal cross-check was
+NOT enough — both small samples were biased the same way, so the overfit
+survived the cross-check and only died on the full universe. **Trust the
+largest multi-regime sample; treat anything found on <100 trades as a
+hypothesis, not a fact.**
+
+**What SURVIVED Round 3 (still valid on the full sample):**
+- Grade-based sizing removal. On 146 trades grade is STILL non-predictive
+  (A 24%, B 24%, S 25%). R:R sizing stays.
+- The reusable analyzer (it did its job — it's what caught the overfit).
+
+## Bottom line — the hard truth
+
+On 146 trades across 2 years and 152 stocks on real data, **no measured factor
+(RSI, grade, score, pattern, volume) separates winners from losers**, and the
+strategy is a net loser (PF 0.72, 23% WR). That is not a tuning problem — it
+means the **entry signal carries no directional information**. Every earlier
+PF>1 (the 30-stock 1.17, the 230-trade run) was small-sample luck.
+
+You cannot tune your way to an edge when nothing discriminates. The honest
+next step is NOT another factor tweak — it is either a fundamentally different
+signal (different timeframe / mean-reversion / event-driven), or accepting
+that simple daily-bar pullback longs on NSE F&O have no edge after costs. More
+parameter fiddling on this entry = more curve-fitting.

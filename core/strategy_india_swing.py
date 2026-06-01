@@ -73,12 +73,11 @@ import os
 PRECISION_MODE = os.environ.get("PRECISION_MODE", "1") != "0"
 
 if PRECISION_MODE:
-    # v4 factor analysis (230-trade 2yr backtest + 919-trade journal, both
-    # judged on spot, within-direction): long win-rate by RSI is 55% at 50-60
-    # but collapses to 38-40% at 60-70+. Mechanism: don't buy overbought —
-    # mid-RSI mean-reversion entries win, chasing strength loses. Tightened the
-    # long ceiling 65 -> 60. (FINDINGS_FACTORS.md)
-    RSI_LONG_MIN, RSI_LONG_MAX   = 50.0, 60.0   # v4: 60-70 zone is 40% WR — cut
+    # NOTE: an earlier v4 tune cut RSI_LONG_MAX to 60 citing "RSI 50-60 = 55%
+    # WR" from the 30-stock backtest. The FULL 152-stock / 146-trade Dhan
+    # backtest DISPROVED it — RSI 50-60 = 26%, 60-70 = 23%, no discrimination.
+    # It was a small-sample curve-fit. Reverted to 65. (FINDINGS_FACTORS.md)
+    RSI_LONG_MIN, RSI_LONG_MAX   = 50.0, 65.0
     RSI_SHORT_MIN, RSI_SHORT_MAX = 25.0, 40.0   # v2 already tight, keep
     VOL_MIN_X                    = 2.0          # v3: was 1.3, raise bar
     MIN_RR                       = 1.5
@@ -460,16 +459,11 @@ def gate3_confirmation(df_daily: pd.DataFrame, direction: str) -> Tuple[bool, Li
     vol_ratio = cur_vol / max(avg_vol, 1.0)
     vol_ok = vol_ratio >= VOL_MIN_X
 
-    # v4 factor analysis: a LONE bullish_pin_bar long was 27% WR (vs
-    # bullish_marubozu 55%, engulfing 50%). A wicky rejection candle is
-    # indecision; a strong-body candle is commitment. Keep pin-only longs ONLY
-    # when a real volume surge backs the rejection (institutional), else drop
-    # it as a qualifying reversal. Strong-body candles qualify as before.
-    if REQUIRE_REVERSAL_CANDLE and direction == "long" and reversal_present:
-        strong_body = any(p in ("bullish_engulfing", "bullish_marubozu") for p in patterns)
-        pin_only = ("bullish_pin_bar" in patterns) and not strong_body
-        if pin_only and vol_ratio < VOL_MIN_X * 1.25:
-            reversal_present = False  # weak lone pin — not enough to trade
+    # NOTE: an earlier v4 tune demoted lone bullish_pin_bar longs (claimed 27%
+    # WR vs marubozu 55% on the 30-stock backtest). The FULL 152-stock Dhan
+    # backtest REVERSED it — pin_bar 29% (best), marubozu 21% (worst). It was a
+    # small-sample artifact, so the demotion was removed. All reversal candles
+    # qualify equally again. (FINDINGS_FACTORS.md)
 
     # v3: precision mode requires REVERSAL candle (not just breakout) + close strength
     if REQUIRE_REVERSAL_CANDLE:
