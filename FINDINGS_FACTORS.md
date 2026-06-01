@@ -53,10 +53,34 @@ analysis:
   (`backtest_india_swing.py --full`), then re-run `analyze_factors.py --csv`
   on that output.
 
+## Round 2 — india_swing's OWN data (230-trade, 2yr, multi-regime)
+
+Pulled the 230-trade india_swing backtest from git history (commit AL) and
+ran `analyze_factors.py --csv` on it. Unlike the journal, this IS the current
+strategy across 2 years and multiple regimes — the clean test. Acted only on
+findings that ALSO hold in the journal (cross-validated, mechanism-backed):
+
+| Finding | Backtest (2yr) | Journal (1mo) | Action |
+|---|---|---|---|
+| **Mid-RSI longs win, overbought longs lose** | RSI 50-60 = **55% WR**, 60-70 = 40%, 70+ = 38% | RSI 40-50 best, 60-70+ = 46% | **RSI_LONG_MAX 65 → 60** in `strategy_india_swing` precision mode. Mechanism: don't buy overbought. |
+| **Lone pin-bar longs bleed; strong-body candles win** | `bullish_pin_bar` **27% WR** vs `bullish_marubozu` **55%**, engulfing 50% | (pin bars weak in legacy too) | gate3: a **lone** `bullish_pin_bar` long now needs a real volume surge (≥1.25× the floor) to qualify; engulfing/marubozu qualify as before. Mechanism: indecision candle vs commitment candle. |
+
+Both changes are cross-validated (two independent samples) and mechanistic, so
+they are NOT curve-fits to one window.
+
+Still NOT acted on (single-sample / weak): grade S marginal +3pt for longs in
+the backtest but worst in the journal → net non-predictive, kept out of sizing;
+short-side score/grade quirks (n too small).
+
 ## Bottom line
 
-Removed two genuinely harmful, regime-independent things: **grade-based sizing
-that amplified the worst trades**, and **breakout-chase loss-magnets**. Added
-**R:R-based sizing** (a real factor) and a **reusable analyzer** so every
-future cut/add is data-backed and re-checkable — not vibes, and not fitted to
-one month.
+Removed/fixed what the data proves wrong across BOTH samples:
+- **grade-based sizing** that amplified the worst trades → R:R sizing
+- **breakout-chase loss-magnets** → added to kill-list
+- **overbought long entries** (RSI 60+) → ceiling cut to 60
+- **lone wicky pin-bar longs** → require volume backing
+
+Added a **reusable analyzer** so every future cut/add is data-backed and
+re-checkable. The decisive next test stays the **full-universe 2yr backtest**
+on real Dhan data, then `analyze_factors.py --csv` on it to confirm these
+hold on the freshest data before any capital.
