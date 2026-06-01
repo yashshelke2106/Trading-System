@@ -1681,16 +1681,41 @@ def render_intelligence_fragment() -> None:
                 placeholder="Which setups are strongest right now?",
             )
             run_query = st.form_submit_button("Run Query", type="primary")
+        # LLM-backed answer when ANTHROPIC_API_KEY + anthropic SDK are present;
+        # otherwise transparently fall back to the existing TF-IDF retrieval.
+        import os as _os
+        _llm_on = bool(_os.environ.get("ANTHROPIC_API_KEY") or _os.environ.get("ANTHROPIC_AUTH_TOKEN"))
+        try:
+            import anthropic as _anthropic  # noqa: F401
+        except Exception:
+            _llm_on = False
+        st.caption("🧠 LLM synthesis ON (Claude)" if _llm_on
+                   else "Retrieval-only (set ANTHROPIC_API_KEY for LLM answers)")
+
         if run_query and question.strip():
-            st.session_state["rag_question"]  = question.strip()
-            st.session_state["rag_response"]  = rag.query(question.strip(), top_k=5)
+            st.session_state["rag_question"] = question.strip()
+            if _llm_on:
+                try:
+                    from core.llm_rag import ask_llm_rag
+                    st.session_state["rag_response"] = ask_llm_rag(question.strip())
+                except Exception as _e:
+                    st.session_state["rag_response"] = rag.query(question.strip(), top_k=5)
+            else:
+                st.session_state["rag_response"] = rag.query(question.strip(), top_k=5)
 
         response = st.session_state.get("rag_response")
         if response:
-            st.code(response.get("answer", ""), language="text")
+            st.markdown(response.get("answer", ""))   # LLM answer renders as markdown
+            # LLM mode returns sources[]; TF-IDF mode returns matches[]
+            if response.get("sources"):
+                st.caption("Sources: " + ", ".join(dict.fromkeys(response["sources"])))
             for item in response.get("matches", []):
                 st.markdown(f"**{item['title']}** [{item['source']}]")
                 st.caption(item["snippet"])
+            if response.get("usage"):
+                u = response["usage"]
+                st.caption(f"tokens in={u['input']} out={u['output']} "
+                           f"cache_read={u['cache_read']}")
     st.divider()
 
 
