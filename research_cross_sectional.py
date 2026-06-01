@@ -73,9 +73,14 @@ def build_panel(universe):
         if d is None or d.empty:
             continue
         d = d.copy(); d.columns = [c.lower() for c in d.columns]
-        d["date"] = pd.to_datetime(d["date"])
-        cols[s] = d.set_index("date")["close"]
-    panel = pd.DataFrame(cols).sort_index()
+        d["date"] = pd.to_datetime(d["date"]).dt.normalize()
+        ser = d.set_index("date")["close"]
+        # Dhan occasionally returns duplicate dates for a symbol — keep the
+        # last and sort, else the panel build fails on duplicate index labels.
+        ser = ser[~ser.index.duplicated(keep="last")].sort_index()
+        cols[s] = ser
+    # Build on the UNION of all (deduped) dates, aligning each symbol to it.
+    panel = pd.concat(cols, axis=1).sort_index()
     panel = panel.dropna(how="all")
     print(f"[XS] panel: {panel.shape[0]} dates x {panel.shape[1]} symbols\n")
     return panel
