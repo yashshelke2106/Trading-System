@@ -213,6 +213,24 @@ LOSS_MAGNETS: List[Setup] = [
         win_rate=0.0, avg_pnl=-30.6, trade_count=4,
         is_loss_magnet=True,
     ),
+    # Added from 919-trade journal factor analysis (longs): breakout-chasing
+    # patterns are the strongest loss magnets — bull_flag_breakout 21% WR
+    # (-26pt vs base), horizontal_breakout_up 33%, supply_zone_bos_up 33%.
+    # Chasing a breakout long = donating; the edge is the pullback, not the break.
+    Setup(
+        name="bull_flag_breakout_chase",
+        direction="long",
+        required_patterns={"bull_flag_breakout"},
+        win_rate=0.21, avg_pnl=-30.0, trade_count=14,
+        is_loss_magnet=True,
+    ),
+    Setup(
+        name="horizontal_breakout_chase",
+        direction="long",
+        required_patterns={"horizontal_breakout_up"},
+        win_rate=0.33, avg_pnl=-20.0, trade_count=24,
+        is_loss_magnet=True,
+    ),
 ]
 
 # Combine all for lookup

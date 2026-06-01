@@ -479,14 +479,21 @@ def _scan(engine, api, top_n, universe=None, orb_only=False, vol_only=False):
         except Exception as e:
             log.debug(f"MC batch failed: {e}")
 
-    # Grade-based position sizing + setup boost
-    GRADE_SIZE = {"S": 1.0, "A": 0.75, "B": 0.5, "C": 0.3}
+    # Position sizing by R:R (a real, mechanical factor) — NOT by grade.
+    # 919-trade journal proof: grade does NOT predict outcome — Grade "S"
+    # (supposedly best, sized 1.0) had 11-25% spot win-rate, the WORST bucket
+    # in both directions, while confluence_score 130+ was also the worst for
+    # longs. Sizing up by grade = sizing up the losers. Removed permanently.
+    # R:R is mechanical and trustworthy: a 1:3 trade risks the same rupees as
+    # a 1:1.5 trade but pays double, so it earns more size. Base 0.5, +0.25
+    # per R above 1.5, capped 1.0. Grade/score now affect only display, never
+    # size. (See FINDINGS_FACTORS.md.)
     for s in sigs:
-        grade = s.get("confluence_grade", "C")
-        size_mult = GRADE_SIZE.get(grade, 0.5)
-        # Setup-matched signals get full size regardless of grade
+        rr = float(s.get("rr_ratio", 0) or 0)
+        size_mult = max(0.5, min(1.0, 0.5 + 0.25 * max(0.0, rr - 1.5)))
+        # Setup-matched signals (data-backed combos) still earn a mild boost
         if s.get("setup_type") in ("mega_winner", "high_wr"):
-            size_mult = min(size_mult * 1.5, 1.0)
+            size_mult = min(size_mult * 1.25, 1.0)
         s["size_mult"] = round(size_mult, 2)
 
     # ── DATA-STALE HALT ──────────────────────────────────────────────────
