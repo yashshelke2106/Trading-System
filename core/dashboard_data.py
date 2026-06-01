@@ -827,7 +827,7 @@ def today_trades_frame() -> pd.DataFrame:
 
 
 def get_index_quotes() -> Dict[str, Dict]:
-    """Fetch Nifty50, BankNifty, India VIX via yfinance intraday bars (30s cache)."""
+    """Fetch Nifty50, BankNifty, India VIX via Dhan daily bars (30s cache)."""
     def loader() -> Dict[str, Dict]:
         try:
             from core.api_dhan import dhan_daily

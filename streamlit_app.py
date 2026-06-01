@@ -489,6 +489,31 @@ def _render_signal_card(signal: Dict, option_rec: Optional[dict] = None) -> None
   </div>
 </div>"""
 
+    # ── Futures leg (INSTRUMENT_MODE=futures) — shown when there's no option
+    #    leg. Renders lot size / qty / notional instead of strike/IV/theta.
+    if not opt_html and (signal.get("instrument") == "FUT" or signal.get("lot_size")):
+        lot = int(signal.get("lot_size", 0) or 0)
+        qty = int(signal.get("quantity", lot) or lot)
+        notional = float(signal.get("notional", entry * qty) or 0)
+        risk_rs = float(signal.get("risk_rupees", abs(entry - stop) * qty) or 0)
+        rr_v = float(signal.get("rr_ratio", 0) or 0)
+        opt_html = f"""
+<div class="sOpt">
+  <div class="sOptHdr">
+    <span style="color:#7ee787;font-weight:800">{symbol}&nbsp;FUT</span>
+    <span style="color:#3a4f66">·</span>
+    <span style="color:#6b84a0">Lot&nbsp;{lot}</span>
+    <span style="color:#3a4f66">·</span>
+    <span style="color:#6b84a0">Qty&nbsp;{qty}</span>
+    <span class="bLive">FUTURES</span>
+  </div>
+  <div class="sOptGrid">
+    <div><div class="sLbl">Notional</div><div class="sVal">₹{notional:,.0f}</div></div>
+    <div><div class="sLbl">Risk</div><div class="sVal" style="color:#ff3d5e">₹{risk_rs:,.0f}</div></div>
+    <div><div class="sLbl">R:R</div><div class="sVal">1:{rr_v:.1f}</div></div>
+  </div>
+</div>"""
+
     meta_html = (
         f'<div class="sMeta">{patterns}</div>' if patterns else ""
     )
@@ -604,7 +629,8 @@ with st.sidebar:
     if data_health.valid:
         st.success(f"Data API ready · {data_health.message}")
     else:
-        st.warning("Data API not set — yfinance fallback active.")
+        st.error("Data API not set — Dhan is the ONLY data source (yfinance removed). "
+                 "Data will be empty until this is configured.")
 
     with st.expander("Set Data API Credentials", expanded=not data_health.valid):
         with st.form("form_data_creds", clear_on_submit=False):
@@ -940,14 +966,20 @@ def render_signals_fragment(top_n_signals: int = 10) -> None:
             entry  = float(sig.get("entry_price", 0) or 0)
             stop   = float(sig.get("sl_price", 0) or 0)
             target = float(sig.get("target_price", 0) or 0)
-            opt = _option_rec_from_signal(sig) or _cached_option_rec(
-                sig.get("symbol", ""), sig.get("direction", "long"), entry, stop, target)
-            opt_txt = ""
-            if opt:
-                opt_txt = (
-                    f"{opt['strike']:.0f} {opt['option_type']} @₹{opt['entry_prem']} "
-                    f"→ ₹{opt['target_prem']} / SL ₹{opt['sl_prem']}"
-                )
+            # Futures signals carry no option leg — show the FUT leg and DON'T
+            # re-fetch an option chain (that defeats futures mode + is slow).
+            if sig.get("instrument") == "FUT" or sig.get("lot_size"):
+                lot = int(sig.get("lot_size", 0) or 0)
+                opt_txt = f"FUT x{lot} (qty {sig.get('quantity', lot)})"
+            else:
+                opt = _option_rec_from_signal(sig) or _cached_option_rec(
+                    sig.get("symbol", ""), sig.get("direction", "long"), entry, stop, target)
+                opt_txt = ""
+                if opt:
+                    opt_txt = (
+                        f"{opt['strike']:.0f} {opt['option_type']} @₹{opt['entry_prem']} "
+                        f"→ ₹{opt['target_prem']} / SL ₹{opt['sl_prem']}"
+                    )
             rows.append({
                 "Time":    _fmt_ts(sig.get("ts", "")),
                 "Symbol":  sig.get("symbol"),
