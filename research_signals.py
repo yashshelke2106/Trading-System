@@ -89,7 +89,10 @@ def prep(df: pd.DataFrame) -> pd.DataFrame:
     df["rsi14"] = rsi(df["close"], 14)
     df["ema200"] = ema(df["close"], 200)
     df["atr"] = atr(df)
-    df["donch_hi20"] = df["high"].rolling(20).max()
+    # PRIOR 20-day high (shifted) so a breakout = close above the range that
+    # EXCLUDES today. Without the shift, close>=rolling-max(incl today) almost
+    # never fires (that was the "Donchian: no trades" bug).
+    df["donch_hi20"] = df["high"].rolling(20).max().shift(1)
     df["donch_lo10"] = df["low"].rolling(10).min()
     m = df["close"].rolling(20).mean(); sd = df["close"].rolling(20).std()
     df["bb_lo"] = m - 2 * sd; df["bb_mid"] = m
@@ -238,13 +241,25 @@ def main():
             print(f"{sig:12} | (no trades)"); continue
         def fmt(x):
             return f"{x['n']:>6} {x['wr']:>3.0f}% {x['pf']:>5.2f} {x['exp']:>+5.2f}" if x else f"{'-':>6} {'-':>4} {'-':>5} {'-':>6}"
-        # verdict: real edge = OOS PF>1.1 AND OOS n>=20
+        # verdict: a REAL edge must hold in BOTH periods (consistency), not
+        # just OOS. A signal that loses IS and wins OOS (or vice-versa) is
+        # regime luck, not an edge — that is just as untrustworthy as overfit.
         verdict = "no data"
-        if so:
-            if so["pf"] >= 1.2 and so["n"] >= 20: verdict = ">>> EDGE (holds OOS)"
-            elif so["pf"] >= 1.0 and so["n"] >= 20: verdict = "marginal"
-            else: verdict = "no edge"
-            if si and si["pf"] >= 1.3 and so["pf"] < 1.0: verdict = "OVERFIT (IS only)"
+        if si and so and si["n"] >= 20 and so["n"] >= 20:
+            if si["pf"] >= 1.15 and so["pf"] >= 1.15:
+                verdict = ">>> EDGE (holds BOTH IS+OOS)"
+            elif si["pf"] >= 1.3 and so["pf"] < 1.0:
+                verdict = "OVERFIT (IS only)"
+            elif so["pf"] >= 1.3 and si["pf"] < 1.0:
+                verdict = "inconsistent (OOS-only luck)"
+            elif si["pf"] >= 1.0 and so["pf"] >= 1.0:
+                verdict = "marginal (both >1, weak)"
+            else:
+                verdict = "no edge"
+        elif so and so["pf"] >= 1.3 and (not si or si["pf"] < 1.0):
+            verdict = "inconsistent (OOS-only luck)"
+        else:
+            verdict = "no edge / thin"
         print(f"{sig:12} | {fmt(si)} | {fmt(so)} | {verdict}")
 
     print("\nTrust ONLY signals marked EDGE (OOS PF>=1.2, n>=20). 'OVERFIT' = looked")
