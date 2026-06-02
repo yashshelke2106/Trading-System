@@ -238,7 +238,7 @@ with col_left:
     st.caption("Cumulative volume vs expected pace based on 20d avg")
     st.dataframe(
         df_cum.style.map(_style_ratio, subset=["Ratio"]),
-        use_container_width=True,
+        width='stretch',
         hide_index=True,
         height=min(50 + len(df_cum) * 35, 650),
     )
@@ -248,7 +248,7 @@ with col_right:
     st.caption("Last 5-min volume vs previous 5-min window")
     st.dataframe(
         df_surge.style.map(_style_ratio, subset=["5-min Ratio"]),
-        use_container_width=True,
+        width='stretch',
         hide_index=True,
         height=min(50 + len(df_surge) * 35, 650),
     )

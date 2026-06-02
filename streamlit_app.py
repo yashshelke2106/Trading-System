@@ -582,7 +582,7 @@ with st.sidebar:
 
     with st.form("form_client_id", clear_on_submit=False):
         client_id_input = st.text_input("Client ID", value=current_client_id)
-        save_client = st.form_submit_button("Save Client ID", use_container_width=True)
+        save_client = st.form_submit_button("Save Client ID", width='stretch')
     if save_client:
         try:
             sec.save_client_id(client_id_input.strip())
@@ -603,8 +603,8 @@ with st.sidebar:
         with st.form("form_trade_token", clear_on_submit=True):
             token_input = st.text_area("Paste JWT Access Token", height=100, placeholder="eyJ...")
             c1, c2 = st.columns(2)
-            save_token  = c1.form_submit_button("Save Token",  use_container_width=True, type="primary")
-            clear_token = c2.form_submit_button("Clear Token", use_container_width=True)
+            save_token  = c1.form_submit_button("Save Token",  width='stretch', type="primary")
+            clear_token = c2.form_submit_button("Clear Token", width='stretch')
         if save_token:
             if not token_input.strip():
                 st.error("Token is empty.")
@@ -637,8 +637,8 @@ with st.sidebar:
             api_key_input    = st.text_input("API Key",    value=sec.get_data_api_key(),    type="password")
             api_secret_input = st.text_input("API Secret", value=sec.get_data_api_secret(), type="password")
             dc1, dc2 = st.columns(2)
-            save_data_creds  = dc1.form_submit_button("Save",  use_container_width=True, type="primary")
-            clear_data_creds = dc2.form_submit_button("Clear", use_container_width=True)
+            save_data_creds  = dc1.form_submit_button("Save",  width='stretch', type="primary")
+            clear_data_creds = dc2.form_submit_button("Clear", width='stretch')
         if save_data_creds:
             try:
                 if not api_key_input.strip():
@@ -665,7 +665,7 @@ with st.sidebar:
         st.text(f"Token health  : {sec.token_health(live_token).message}")
         st.text(f"Data API key  : {live_key[:8] + '…' if live_key else 'NOT SET'}")
         st.text(f"Data secret   : {'SET' if live_secret else 'NOT SET'}")
-        if st.button("Rebuild API sessions", use_container_width=True):
+        if st.button("Rebuild API sessions", width='stretch'):
             _reset_runtime_caches(refresh_api_client=True)
             st.success("Caches cleared and sessions rebuilt.")
             st.rerun()
@@ -998,7 +998,7 @@ def render_signals_fragment(top_n_signals: int = 10) -> None:
             df.style
               .map(_dir_style,   subset=["Dir"])
               .map(_grade_style, subset=["Grade"]),
-            use_container_width=True, hide_index=True, height=420,
+            width='stretch', hide_index=True, height=420,
         )
     st.divider()
 
@@ -1037,7 +1037,7 @@ def render_positions_fragment() -> None:
 
         st.dataframe(
             pd.DataFrame(rows).style.map(_pnl_clr, subset=["Unrealized"]),
-            use_container_width=True, hide_index=True,
+            width='stretch', hide_index=True,
         )
     st.divider()
 
@@ -1055,7 +1055,7 @@ def render_volume_fragment() -> None:
         with st.expander(f"{len(errors)} symbols failed to load", expanded=False):
             st.dataframe(
                 pd.DataFrame([{"Symbol": k, "Error": v} for k, v in errors.items()]),
-                use_container_width=True, hide_index=True,
+                width='stretch', hide_index=True,
             )
 
     rows_1h = analytics.get("rows_1h", [])
@@ -1080,7 +1080,7 @@ def render_volume_fragment() -> None:
             })
             st.dataframe(
                 df_1h.style.map(_style_ratio, subset=["Ratio"]),
-                use_container_width=True, hide_index=True,
+                width='stretch', hide_index=True,
                 height=min(520, 50 + len(df_1h) * 35),
             )
 
@@ -1098,7 +1098,7 @@ def render_volume_fragment() -> None:
             })
             st.dataframe(
                 df_5m.style.map(_style_ratio, subset=["Ratio"]),
-                use_container_width=True, hide_index=True,
+                width='stretch', hide_index=True,
                 height=min(520, 50 + len(df_5m) * 35),
             )
     st.divider()
@@ -1282,7 +1282,7 @@ def render_spike_alerts_fragment() -> None:
         df_spike.style
             .map(_style_conf, subset=["Conf"])
             .map(_style_dir, subset=["Dir"]),
-        use_container_width=True,
+        width='stretch',
         hide_index=True,
         height=min(80 + len(rows) * 38, 520),
     )
@@ -1309,7 +1309,7 @@ def render_trades_fragment() -> None:
             qty_in   = n3.number_input("Qty (overridden by lot size)", min_value=1, step=1, help="Auto-replaced by NSE lot size on submit")
             note_in  = n4.text_input("Note")
             st.caption("⚠️ Qty is auto-set to 1 lot from NSE_LOT_SIZES on submit. Enter symbol correctly.")
-            submit_trade = st.form_submit_button("Add Trade", type="primary", use_container_width=True)
+            submit_trade = st.form_submit_button("Add Trade", type="primary", width='stretch')
 
         if submit_trade:
             if not symbol_in.strip():
@@ -1497,10 +1497,10 @@ def render_trades_fragment() -> None:
         eq_plot["ts_dt"] = pd.to_datetime(eq_plot.get("timestamp", pd.Series()), errors="coerce")
         eq_dated = eq_plot.dropna(subset=["ts_dt"]).set_index("ts_dt")
         if not eq_dated.empty:
-            st.line_chart(eq_dated["cumulative_pnl"], use_container_width=True, height=160)
+            st.line_chart(eq_dated["cumulative_pnl"], width='stretch', height=160)
         else:
             eq["trade_no"] = range(1, len(eq) + 1)
-            st.line_chart(eq.set_index("trade_no")["cumulative_pnl"], use_container_width=True, height=160)
+            st.line_chart(eq.set_index("trade_no")["cumulative_pnl"], width='stretch', height=160)
 
         # Drawdown
         st.markdown(
@@ -1509,9 +1509,9 @@ def render_trades_fragment() -> None:
             unsafe_allow_html=True,
         )
         if not eq_dated.empty:
-            st.area_chart(eq_dated["drawdown"], use_container_width=True, height=90)
+            st.area_chart(eq_dated["drawdown"], width='stretch', height=90)
         else:
-            st.area_chart(eq.set_index("trade_no")["drawdown"], use_container_width=True, height=90)
+            st.area_chart(eq.set_index("trade_no")["drawdown"], width='stretch', height=90)
 
         # Daily P&L bar chart (altair green/red)
         if "date" in closed_f.columns:
@@ -1544,9 +1544,9 @@ def render_trades_fragment() -> None:
                     )
                     .properties(height=140)
                 )
-                st.altair_chart(chart, use_container_width=True)
+                st.altair_chart(chart, width='stretch')
             except Exception:
-                st.bar_chart(daily_pnl.set_index("Date")["PnL"], use_container_width=True, height=140)
+                st.bar_chart(daily_pnl.set_index("Date")["PnL"], width='stretch', height=140)
 
     # ── Trade tables ───────────────────────────────────────────────────────
     tab_all, tab_today, tab_wins, tab_losses, tab_open, tab_sym, tab_dir, tab_pat = st.tabs([
@@ -1572,7 +1572,7 @@ def render_trades_fragment() -> None:
                 ),
                 subset=["pnl"],
             )
-        st.dataframe(styled, use_container_width=True, hide_index=True, height=360)
+        st.dataframe(styled, width='stretch', hide_index=True, height=360)
 
     with tab_all:    _render_trade_table(closed_f)
     with tab_today:  _render_trade_table(today_cl)
@@ -1591,7 +1591,7 @@ def render_trades_fragment() -> None:
                      Win_Rate=("outcome", lambda v: (v == "TARGET_HIT").mean() * 100))
                 .round(2).sort_values("Total_PnL", ascending=False).reset_index()
             )
-            st.dataframe(by_sym, use_container_width=True, hide_index=True)
+            st.dataframe(by_sym, width='stretch', hide_index=True)
 
     with tab_dir:
         if closed_f.empty:
@@ -1604,7 +1604,7 @@ def render_trades_fragment() -> None:
                      Win_Rate=("outcome", lambda v: (v == "TARGET_HIT").mean() * 100))
                 .round(2).reset_index()
             )
-            st.dataframe(by_dir, use_container_width=True, hide_index=True)
+            st.dataframe(by_dir, width='stretch', hide_index=True)
 
     with tab_pat:
         pat_col = next((c for c in ["patterns_combined", "exit_reason"] if c in closed_f.columns), None)
@@ -1634,7 +1634,7 @@ def render_trades_fragment() -> None:
                     .round(2).sort_values("Total_PnL", ascending=False)
                     .reset_index().rename(columns={"_pat": "Pattern"})
                 )
-                st.dataframe(pat_agg, use_container_width=True, hide_index=True)
+                st.dataframe(pat_agg, width='stretch', hide_index=True)
 
     st.divider()
 
@@ -1847,7 +1847,7 @@ def render_accuracy_fragment() -> None:
                 .map(_style_outcome, subset=["outcome"] if "outcome" in display_cols else [])
                 .map(_style_pnl_rs,  subset=["pnl_rupees"] if "pnl_rupees" in log_df.columns else [])
                 .map(_style_dir,     subset=["direction"] if "direction" in display_cols else []),
-            use_container_width=True,
+            width='stretch',
             hide_index=True,
             height=440,
         )
@@ -1878,7 +1878,7 @@ def render_accuracy_fragment() -> None:
                 today_df[t_cols].style
                     .map(_style_outcome, subset=["outcome"] if "outcome" in t_cols else [])
                     .map(_style_pnl_rs,  subset=["pnl_rupees"] if "pnl_rupees" in today_df.columns else []),
-                use_container_width=True,
+                width='stretch',
                 hide_index=True,
             )
 
@@ -1900,7 +1900,7 @@ def render_accuracy_fragment() -> None:
                 journal_df.groupby("grade").agg(**agg)
                 .round(2).reset_index().sort_values("Win_Rate_%", ascending=False)
             )
-            st.dataframe(by_grade, use_container_width=True, hide_index=True)
+            st.dataframe(by_grade, width='stretch', hide_index=True)
         else:
             st.caption("No grade data.")
 
@@ -1919,7 +1919,7 @@ def render_accuracy_fragment() -> None:
             if "pnl_rupees" in dir_df.columns:
                 agg_d["Total_PnL_₹"] = ("pnl_rupees", "sum")
             by_dir = dir_df.groupby("direction").agg(**agg_d).round(2).reset_index()
-            st.dataframe(by_dir, use_container_width=True, hide_index=True)
+            st.dataframe(by_dir, width='stretch', hide_index=True)
 
             # Hour-of-day breakdown
             if "ts_outcome" in journal_df.columns:
@@ -1933,8 +1933,8 @@ def render_accuracy_fragment() -> None:
                     }
                     by_hour = hourly_df.groupby("hour").agg(**h_agg).round(2).reset_index()
                     st.caption("P&L by hour of day (IST)")
-                    st.bar_chart(by_hour.set_index("hour")["Sum_PnL_Rs"], use_container_width=True, height=160)
-                    st.dataframe(by_hour, use_container_width=True, hide_index=True)
+                    st.bar_chart(by_hour.set_index("hour")["Sum_PnL_Rs"], width='stretch', height=160)
+                    st.dataframe(by_hour, width='stretch', hide_index=True)
         else:
             st.caption("No direction data.")
 
@@ -1953,13 +1953,13 @@ def render_accuracy_fragment() -> None:
             ca, cb = st.columns(2)
             with ca:
                 st.caption("Cumulative P&L (₹) — 1 lot each signal")
-                st.line_chart(eq.set_index("#")["Cum_PnL_₹"], use_container_width=True, height=200)
+                st.line_chart(eq.set_index("#")["Cum_PnL_₹"], width='stretch', height=200)
             with cb:
                 st.caption("Drawdown (₹)")
-                st.area_chart(eq.set_index("#")["Drawdown_₹"], use_container_width=True, height=200)
+                st.area_chart(eq.set_index("#")["Drawdown_₹"], width='stretch', height=200)
 
             st.caption("Cumulative P&L (%)")
-            st.line_chart(eq.set_index("#")["Cum_PnL_%"], use_container_width=True, height=160)
+            st.line_chart(eq.set_index("#")["Cum_PnL_%"], width='stretch', height=160)
 
     # ── Tab: Daily Report ──────────────────────────────────────────────────
     with tab_daily:
@@ -1981,14 +1981,14 @@ def render_accuracy_fragment() -> None:
                 .round(2).reset_index().sort_values("date", ascending=False)
             )
             chart_col = "Sum_PnL_₹" if "Sum_PnL_₹" in daily.columns else "Sum_PnL_%"
-            st.bar_chart(daily.set_index("date")[chart_col], use_container_width=True, height=200)
+            st.bar_chart(daily.set_index("date")[chart_col], width='stretch', height=200)
             st.dataframe(
                 daily.style.map(
                     lambda v: "color:#00c896;font-weight:600" if isinstance(v,(int,float)) and v > 0
                     else ("color:#ff3d5e;font-weight:600" if isinstance(v,(int,float)) and v < 0 else ""),
                     subset=[chart_col],
                 ),
-                use_container_width=True,
+                width='stretch',
                 hide_index=True,
             )
 
@@ -2010,7 +2010,7 @@ def render_accuracy_fragment() -> None:
                     best["ts_outcome"] = best["ts_outcome"].astype(str).str[:16]
                 st.dataframe(
                     best.style.map(_style_pnl_rs, subset=["pnl_rupees"]),
-                    use_container_width=True, hide_index=True,
+                    width='stretch', hide_index=True,
                 )
             with wc:
                 st.markdown("**💀 Top 10 Losses**")
@@ -2019,7 +2019,7 @@ def render_accuracy_fragment() -> None:
                     worst["ts_outcome"] = worst["ts_outcome"].astype(str).str[:16]
                 st.dataframe(
                     worst.style.map(_style_pnl_rs, subset=["pnl_rupees"]),
-                    use_container_width=True, hide_index=True,
+                    width='stretch', hide_index=True,
                 )
 
     st.divider()
@@ -2081,7 +2081,7 @@ def _render_live_tracking(tracking: List[Dict]) -> None:
         df_track.style
             .map(_style_status, subset=["Status"])
             .map(_style_dir, subset=["Dir"]),
-        use_container_width=True,
+        width='stretch',
         hide_index=True,
         height=min(80 + len(rows) * 38, 400),
     )
@@ -2134,7 +2134,7 @@ def render_learning_fragment() -> None:
                 )
                 if rows:
                     df_pat = pd.DataFrame(rows)
-                    st.dataframe(df_pat, use_container_width=True, hide_index=True)
+                    st.dataframe(df_pat, width='stretch', hide_index=True)
                 else:
                     st.caption("Not enough per-pattern data yet.")
             else:
@@ -2151,7 +2151,7 @@ def render_learning_fragment() -> None:
                 ]
                 rows.sort(key=lambda x: -float(x["Win Rate"].rstrip("%")))
                 if rows:
-                    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+                    st.dataframe(pd.DataFrame(rows), width='stretch', hide_index=True)
                 else:
                     st.caption("Not enough regime data yet (need 3+ trades per regime).")
             else:
@@ -2171,17 +2171,17 @@ def render_learning_fragment() -> None:
                         "Drift":      f"{drift:+.2f}",
                         "Range":      f"[{p['min']}, {p['max']}]",
                     })
-                st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+                st.dataframe(pd.DataFrame(rows), width='stretch', hide_index=True)
 
             c_force, c_reset = st.columns(2)
-            if c_force.button("Force learning cycle now", use_container_width=True):
+            if c_force.button("Force learning cycle now", width='stretch'):
                 changes = learner.maybe_update(force=True)
                 if changes:
                     st.success(f"Updated {len(changes)} params: {list(changes.keys())}")
                 else:
                     st.info("No parameter changes warranted at this time.")
                 st.rerun()
-            if c_reset.button("Reset all params to defaults", use_container_width=True):
+            if c_reset.button("Reset all params to defaults", width='stretch'):
                 learner.reset_all()
                 st.success("All learned parameters reset to defaults.")
                 st.rerun()
@@ -2209,7 +2209,7 @@ def render_learning_fragment() -> None:
                                 "N Trades": e.get("n_trades", ""),
                             })
                     if rows:
-                        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+                        st.dataframe(pd.DataFrame(rows), width='stretch', hide_index=True)
                     else:
                         st.caption("No changes logged yet.")
                 else:

@@ -239,7 +239,7 @@ with col_pos:
 
         st.dataframe(
             df_pos.style.apply(color_row, axis=1),
-            use_container_width=True,
+            width='stretch',
             hide_index=True,
         )
     else:
@@ -252,7 +252,7 @@ with col_surge:
         rows = sorted(surges.items(), key=lambda x: x[1], reverse=True)
         df_surge = pd.DataFrame(rows, columns=["Symbol", "Vol Ratio"])
         df_surge["Vol Ratio"] = df_surge["Vol Ratio"].map(lambda x: f"{x:.2f}x")
-        st.dataframe(df_surge, use_container_width=True, hide_index=True)
+        st.dataframe(df_surge, width='stretch', hide_index=True)
     else:
         st.info("No surges detected")
 
@@ -293,7 +293,7 @@ if today_trades:
     st.dataframe(
         df_trades[display_cols].rename(columns={"pnl_fmt": "P&L"})
         .style.map(color_pnl, subset=["P&L"]),
-        use_container_width=True,
+        width='stretch',
         hide_index=True,
     )
 else:

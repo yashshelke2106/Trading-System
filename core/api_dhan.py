@@ -348,6 +348,16 @@ class DhanAPI:
     _OC_RATE_LIMIT = 2.5      # min 2.5s between option chain calls (was 1.0 — caused 429 on 153-symbol scans)
     _oc_backoff_until = 0.0   # when this is in future, skip option chain calls entirely
 
+    # /charts/intraday and /charts/historical share Dhan's chart API quota
+    # (~5 req/sec). Without throttling, an 80+ symbol scan blows the limit
+    # in <2s and urllib3 buries the 429s as connection errors — every fetch
+    # comes back empty. Mirrors the option-chain pattern above.
+    _chart_last_call = 0.0
+    _CHART_RATE_LIMIT = 1.0        # 1 req/sec — Dhan's effective chart limit is
+                                   # tighter than docs suggest (4.5/sec triggered
+                                   # 429s on half of calls); 1/sec stays clean
+    _chart_backoff_until = 0.0     # extended by the 429 handler in _request
+
     def __init__(self):
         # Prefer keyring/saved value over config to allow runtime client_id swap.
         self.client_id = _sec.get_client_id() or config.DHAN_CLIENT_ID
@@ -368,7 +378,11 @@ class DhanAPI:
             read=2 if allow_retries else 0,
             status=2 if allow_retries else 0,
             backoff_factor=0.5 if allow_retries else 0,
-            status_forcelist=[429, 500, 502, 503, 504],
+            # 429 deliberately NOT in the list — urllib3 would silently retry
+            # and bury the response as a ResponseError, hiding the rate-limit
+            # from our _request handler. We pre-throttle via _throttle_chart
+            # and handle any leftover 429 explicitly below.
+            status_forcelist=[500, 502, 503, 504],
             allowed_methods=None if allow_retries else frozenset({"GET"}),
         )
         adapter = HTTPAdapter(max_retries=retries, pool_connections=20, pool_maxsize=20)
@@ -433,8 +447,23 @@ class DhanAPI:
             return True
         return False
 
+    def _throttle_chart(self, endpoint: str) -> None:
+        """Pace /charts/* calls under Dhan's ~5 req/sec ceiling."""
+        if "/charts/" not in endpoint:
+            return
+        import time as _t
+        now = _t.time()
+        if now < DhanAPI._chart_backoff_until:
+            _t.sleep(DhanAPI._chart_backoff_until - now)
+            now = _t.time()
+        elapsed = now - DhanAPI._chart_last_call
+        if elapsed < DhanAPI._CHART_RATE_LIMIT:
+            _t.sleep(DhanAPI._CHART_RATE_LIMIT - elapsed)
+        DhanAPI._chart_last_call = _t.time()
+
     def _request(self, method: str, endpoint: str, data: dict = None,
                  _retry: bool = True, _use_data_session: bool = False) -> dict:
+        self._throttle_chart(endpoint)
         url = f"{self.base_url}{endpoint}"
         sess = self.data_session if _use_data_session else self.session
 
@@ -460,6 +489,12 @@ class DhanAPI:
                 if "/optionchain" in endpoint:
                     DhanAPI._oc_backoff_until = _t.time() + 30
                     log.warning(f"Dhan 429 on option chain — global 30s backoff set")
+                if "/charts/" in endpoint:
+                    # Honor Retry-After if Dhan sent one, else 30s — short
+                    # windows (10s) bounced straight back into 429s in testing
+                    chart_wait = max(wait, 30.0)
+                    DhanAPI._chart_backoff_until = _t.time() + chart_wait
+                    log.warning(f"Dhan 429 on charts — global {chart_wait:.0f}s backoff set")
                 _t.sleep(min(wait, 5))
                 return self._request(method, endpoint, data, _retry=False,
                                      _use_data_session=_use_data_session)
@@ -533,8 +568,11 @@ class DhanAPI:
 
     def _parse_ohlcv(self, result: dict) -> pd.DataFrame:
         if "error" in result:
+            log.warning("Dhan OHLCV error body: %s", result.get("error"))
             return pd.DataFrame()
         if not all(k in result for k in ["open", "high", "low", "close", "volume"]):
+            keys = list(result.keys()) if isinstance(result, dict) else type(result).__name__
+            log.warning("Dhan OHLCV unexpected shape: keys=%s", keys)
             return pd.DataFrame()
         n = len(result["open"])
         return pd.DataFrame({
