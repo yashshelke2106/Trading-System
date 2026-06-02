@@ -950,10 +950,22 @@ class TimeframeSyncEngine:
 
         # Thresholds tuned to actually fire signals in normal markets.
         # Old (S=110/A=85/B=65/C=50) produced zero signals on 153-symbol scans.
-        if score >= 95 and is_a_tier:
-            g = "S"   # Super — A-tier symbol + score 95+ + 15m confirmed
+        #
+        # Grade-S guardrails (added after journal audit on 2026-06-02):
+        # Of 12 historical Grade-S signals, two AXISBANK longs entered at
+        # vol_ratio 0.16x and 1.03x (no institutional conviction) and lost
+        # ~Rs 26k combined — dominating the entire Grade-S sample (-Rs 25.7k).
+        # Others entered at RSI 96.9 (DEEPAKNTR) / 92.4 (TATACONSUM) — textbook
+        # buying tops. The S boost (1.0x size vs A's 0.75x) shouldn't apply
+        # when the trade lacks volume conviction or RSI is pinned to the
+        # extreme opposite of the trade direction. Failing signals fall
+        # through to Grade A — still tradeable, just no S-tier sizing.
+        _s_vol_ok = (s5.volume_ratio or 0) >= 1.5
+        _s_rsi_ok = (s5.rsi <= 80) if lng else (s5.rsi >= 20)
+        if score >= 95 and is_a_tier and _s_vol_ok and _s_rsi_ok:
+            g = "S"   # Super — A-tier + score 95+ + 15m + vol≥1.5x + RSI sane
         elif score >= 70:
-            g = "A"   # Strong setup
+            g = "A"   # Strong setup (also catches S candidates failing vol/RSI guards)
         elif score >= 50:
             g = "B"   # Decent setup (smaller position via grade-based sizing)
         elif is_top_mover and score >= 35:
