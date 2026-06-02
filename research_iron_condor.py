@@ -86,16 +86,36 @@ def _series(symbol: str, days: int):
     return s[~s.index.duplicated(keep="last")].sort_index()
 
 
-def summarize(rets: np.ndarray) -> dict:
+def newey_west_se(x: np.ndarray, lag: int) -> float:
+    """HAC (Newey-West) standard error of the MEAN, correcting for the
+    autocorrelation that OVERLAPPING windows inject (step REBAL < window
+    HORIZON → non-independent trades). The naive SE / Sharpe overstate
+    significance; the Bartlett-kernel HAC estimator fixes it. lag=0 → IID."""
+    n = len(x)
+    if n < 2:
+        return float("nan")
+    xc = x - x.mean()
+    var = float(np.dot(xc, xc) / n)                      # gamma_0
+    for k in range(1, min(lag, n - 1) + 1):
+        gamma_k = float(np.dot(xc[k:], xc[:-k]) / n)
+        var += 2.0 * (1.0 - k / (lag + 1)) * gamma_k     # Bartlett weight
+    var = max(var, 0.0)
+    return float(np.sqrt(var / n))
+
+
+def summarize(rets: np.ndarray, lag: int = 0) -> dict:
     if len(rets) == 0:
         return {}
     mean = rets.mean()
     sd = rets.std()
     sharpe = (mean / sd * np.sqrt(252 / HORIZON)) if sd > 0 else 0.0
+    nw_se = newey_west_se(rets, lag)
+    t_stat = (mean / nw_se) if (nw_se and nw_se > 0) else 0.0
     eq = np.cumprod(1 + rets); peak = np.maximum.accumulate(eq)
     mdd = float(((eq - peak) / peak).min() * 100)
     return {"n": len(rets), "mean_pct": mean * 100, "win": (rets > 0).mean() * 100,
-            "sharpe": sharpe, "worst_pct": rets.min() * 100, "mdd_pct": mdd}
+            "sharpe": sharpe, "t_stat": t_stat, "nw_se": nw_se,
+            "worst_pct": rets.min() * 100, "mdd_pct": mdd}
 
 
 def main():
@@ -105,8 +125,15 @@ def main():
     ap.add_argument("--delta", type=float, default=DELTA_MULT, help="short strikes at S ± this·σ")
     ap.add_argument("--wing", type=float, default=WING_MULT, help="wing width in units of σ")
     ap.add_argument("--cost", type=float, default=COST_FRAC, help="round-trip cost as frac of gross premium")
+    ap.add_argument("--no-overlap", action="store_true",
+                    help="step = horizon so trades don't overlap (clean IID stats, fewer obs)")
     args = ap.parse_args()
     globals()["HORIZON"] = args.horizon
+    # Overlap accounting: step REBAL, hold HORIZON → ~HORIZON/REBAL trades share
+    # a holding window and are not independent. --no-overlap steps a full
+    # horizon. overlap_lag drives the Newey-West significance correction.
+    rebal = args.horizon if args.no_overlap else REBAL
+    overlap_lag = 0 if rebal >= args.horizon else max(1, int(np.ceil(args.horizon / rebal)) - 1)
 
     print(f"[IC] fetching India VIX + NIFTY ({args.days}d) ...")
     vix = _series("INDIAVIX", args.days); nifty = _series("NIFTY", args.days)
@@ -123,7 +150,7 @@ def main():
 
     T = args.horizon / 252.0
     rows = []
-    for i in range(0, len(idx) - args.horizon, REBAL):
+    for i in range(0, len(idx) - args.horizon, rebal):
         S = float(nifty.iloc[i]); iv = float(vix.iloc[i]) / 100.0
         if S <= 0 or iv <= 0:
             continue
@@ -159,7 +186,8 @@ def main():
     split = dates[int(len(dates) * (1 - OOS_FRACTION))]
     is_r = np.array([r[1] for r in rows if r[0] < split])
     oos_r = np.array([r[1] for r in rows if r[0] >= split])
-    full, si, so = summarize(rets), summarize(is_r), summarize(oos_r)
+    full = summarize(rets, overlap_lag)
+    si, so = summarize(is_r, overlap_lag), summarize(oos_r, overlap_lag)
 
     print("=" * 70)
     print("  DEFINED-RISK IRON CONDOR on NIFTY — net of costs, tail CAPPED")
@@ -167,16 +195,22 @@ def main():
     print("  (returns = net P&L / capital-at-risk per trade)")
     print("=" * 70)
     print(f"  mean return/trade   {full['mean_pct']:+.1f}% of risk   win {full['win']:.0f}%")
-    print(f"  ~Sharpe             {full['sharpe']:.2f}")
-    print(f"  IS  mean            {si['mean_pct']:+.1f}%   win {si['win']:.0f}%   (n={si['n']})")
-    print(f"  OOS mean            {so['mean_pct']:+.1f}%   win {so['win']:.0f}%   (n={so['n']})")
+    print(f"  ~Sharpe             {full['sharpe']:.2f}   (overlap-inflated — trust the t-stat)")
+    print(f"  t-stat (HAC)        {full['t_stat']:+.2f}   overlap-lag={overlap_lag}   (|t|>2 ≈ real)")
+    print(f"  IS  mean            {si['mean_pct']:+.1f}%   t={si['t_stat']:+.2f}   win {si['win']:.0f}%   (n={si['n']})")
+    print(f"  OOS mean            {so['mean_pct']:+.1f}%   t={so['t_stat']:+.2f}   win {so['win']:.0f}%   (n={so['n']})")
     print("-" * 70)
     print(f"  worst single trade  {full['worst_pct']:+.1f}% of risk   (CAPPED by the wings)")
     print(f"  max drawdown        {full['mdd_pct']:+.1f}%   (compounding return-on-risk)")
     print("=" * 70)
 
     edge = si["mean_pct"] > 0 and so["mean_pct"] > 0
+    oos_sig = abs(so.get("t_stat", 0.0)) >= 2.0
     print()
+    if not oos_sig:
+        print(f"  ⚠ OOS t-stat {so['t_stat']:+.2f}: after the overlap correction the OOS")
+        print("    return is NOT statistically distinguishable from zero — a positive")
+        print("    OOS mean here is within noise. Don't size on it.\n")
     if edge and so["mean_pct"] >= 3:
         print("  VERDICT: NET POSITIVE in BOTH halves after costs, with the tail CAPPED.")
         print("  The VRP is harvestable in defined-risk form. Next: TINY size, forward")

@@ -72,13 +72,34 @@ def realized_vol(nifty: pd.Series, start_i: int, h: int) -> float:
     return float(rets.std() * ANN * 100)
 
 
-def summarize(vrps: np.ndarray, label: str) -> dict:
+def newey_west_se(x: np.ndarray, lag: int) -> float:
+    """HAC (Newey-West) standard error of the MEAN, correcting for the
+    autocorrelation that OVERLAPPING windows inject. With step REBAL < window
+    HORIZON, consecutive observations share data and are not independent —
+    the naive SE (and the Sharpe built on it) overstate significance. The
+    Bartlett-kernel HAC estimator fixes that. lag=0 → plain IID SE."""
+    n = len(x)
+    if n < 2:
+        return float("nan")
+    xc = x - x.mean()
+    var = float(np.dot(xc, xc) / n)                      # gamma_0
+    for k in range(1, min(lag, n - 1) + 1):
+        gamma_k = float(np.dot(xc[k:], xc[:-k]) / n)
+        var += 2.0 * (1.0 - k / (lag + 1)) * gamma_k     # Bartlett weight
+    var = max(var, 0.0)
+    return float(np.sqrt(var / n))
+
+
+def summarize(vrps: np.ndarray, label: str, lag: int = 0) -> dict:
     if len(vrps) == 0:
         return {}
     mean = vrps.mean()
     pos = (vrps > 0).mean() * 100
     sd = vrps.std()
     sharpe = (mean / sd * np.sqrt(252 / HORIZON)) if sd > 0 else 0.0   # annualised-ish
+    # Overlap-honest significance: HAC SE of the mean → t-stat you can trust.
+    nw_se = newey_west_se(vrps, lag)
+    t_stat = (mean / nw_se) if (nw_se and nw_se > 0) else 0.0
     worst = vrps.min()
     # cumulative-VRP "equity" drawdown — the steamroller view
     eq = np.cumsum(vrps); peak = np.maximum.accumulate(eq)
@@ -87,6 +108,7 @@ def summarize(vrps: np.ndarray, label: str) -> dict:
     p5 = np.percentile(vrps, 5)
     kurt = float(pd.Series(vrps).kurt())   # excess kurtosis; >0 = fat tails
     return {"n": len(vrps), "mean": mean, "pos": pos, "sharpe": sharpe,
+            "nw_se": nw_se, "t_stat": t_stat,
             "worst": worst, "p5": p5, "mdd": mdd, "kurt": kurt}
 
 
@@ -94,8 +116,15 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--days", type=int, default=DAYS)
     ap.add_argument("--horizon", type=int, default=HORIZON)
+    ap.add_argument("--no-overlap", action="store_true",
+                    help="step = horizon so windows don't overlap (clean IID stats, fewer obs)")
     args = ap.parse_args()
     globals()["HORIZON"] = args.horizon
+    # Overlap accounting: step REBAL, window HORIZON → ~HORIZON/REBAL obs share
+    # data. --no-overlap steps a full horizon (independent). overlap_lag drives
+    # the Newey-West correction.
+    rebal = args.horizon if args.no_overlap else REBAL
+    overlap_lag = 0 if rebal >= args.horizon else max(1, int(np.ceil(args.horizon / rebal)) - 1)
 
     print(f"[VRP] fetching India VIX + NIFTY ({args.days}d) from Dhan ...")
     vix = _series("INDIAVIX", args.days)
@@ -114,7 +143,7 @@ def main():
         print("[VRP] not enough history. Try --days 2600."); return
 
     rows = []
-    for i in range(0, len(idx) - args.horizon, REBAL):
+    for i in range(0, len(idx) - args.horizon, rebal):
         implied = float(vix.iloc[i])                 # India VIX = annualised implied %
         rv = realized_vol(nifty, i, args.horizon)    # annualised realized %
         if np.isnan(rv) or implied <= 0:
@@ -130,8 +159,8 @@ def main():
     is_v = np.array([r[1] for r in rows if r[0] < split])
     oos_v = np.array([r[1] for r in rows if r[0] >= split])
 
-    full = summarize(vrp, "full")
-    si, so = summarize(is_v, "IS"), summarize(oos_v, "OOS")
+    full = summarize(vrp, "full", overlap_lag)
+    si, so = summarize(is_v, "IS", overlap_lag), summarize(oos_v, "OOS", overlap_lag)
 
     print("=" * 70)
     print("  VOLATILITY RISK PREMIUM — India VIX (implied) minus NIFTY realized")
@@ -139,9 +168,10 @@ def main():
     print("=" * 70)
     print(f"  mean VRP        {full['mean']:+.2f} vol-pts   (implied richer than realized by this)")
     print(f"  positive %      {full['pos']:.0f}%   of periods implied > realized")
-    print(f"  ~Sharpe         {full['sharpe']:.2f}")
-    print(f"  IS  mean        {si['mean']:+.2f}   pos {si['pos']:.0f}%   (n={si['n']})")
-    print(f"  OOS mean        {so['mean']:+.2f}   pos {so['pos']:.0f}%   (n={so['n']})")
+    print(f"  ~Sharpe         {full['sharpe']:.2f}   (overlap-inflated — trust the t-stat)")
+    print(f"  t-stat (HAC)    {full['t_stat']:+.2f}   overlap-lag={overlap_lag}   (|t|>2 ≈ real)")
+    print(f"  IS  mean        {si['mean']:+.2f}   t={si['t_stat']:+.2f}   pos {si['pos']:.0f}%   (n={si['n']})")
+    print(f"  OOS mean        {so['mean']:+.2f}   t={so['t_stat']:+.2f}   pos {so['pos']:.0f}%   (n={so['n']})")
     print("-" * 70)
     print("  THE TAIL (this is what kills short-vol accounts):")
     print(f"  worst period    {full['worst']:+.2f} vol-pts   (realized blew past implied = a crash)")
@@ -152,8 +182,13 @@ def main():
 
     # verdict
     edge = (si["mean"] > 0 and so["mean"] > 0 and full["mean"] > 1.0)
+    oos_sig = abs(so.get("t_stat", 0.0)) >= 2.0
     tail_ratio = abs(full["worst"]) / full["mean"] if full["mean"] != 0 else 1e9
     print()
+    if not oos_sig:
+        print(f"  ⚠ OOS t-stat {so['t_stat']:+.2f}: after the overlap correction the OOS")
+        print("    premium is NOT statistically distinguishable from zero. A positive")
+        print("    OOS mean here is within noise — do not bank on it.\n")
     if edge and tail_ratio < 8:
         print("  VERDICT: VRP is positive in BOTH halves and the tail looks survivable")
         print("  with DEFINED-RISK sizing. Worth a small forward paper test (short")
