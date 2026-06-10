@@ -147,7 +147,11 @@ def honest_performance(rows: Sequence[Dict], *, min_clean: int = MIN_CLEAN_DEFAU
     return p
 
 
-def from_journal(path: str = "logs/signal_journal.jsonl", **kw) -> Perf:
+def from_journal(path: str = "logs/signal_journal.jsonl",
+                 since: Optional[str] = None, **kw) -> Perf:
+    """Honest performance from the journal. `since` (ISO date/datetime string)
+    filters to signals timestamped >= since — used for a clean FORWARD paper test
+    so new signals are scored on their own, not blended into historical rows."""
     rows = []
     if os.path.exists(path):
         for line in open(path, encoding="utf-8"):
@@ -157,6 +161,8 @@ def from_journal(path: str = "logs/signal_journal.jsonl", **kw) -> Perf:
                     rows.append(json.loads(line))
                 except Exception:
                     pass
+    if since:
+        rows = [r for r in rows if str(r.get("ts", "")) >= since]
     return honest_performance(rows, **kw)
 
 
