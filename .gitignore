@@ -32,3 +32,11 @@ Thumbs.db
 .vscode/
 .idea/
 *.swp
+
+# Generated / regenerable bulk — never commit (.code-review-graph was a 1.6 GB gap)
+.code-review-graph/
+*.lock
+.claude/scheduled_tasks.lock
+*.bak
+# generated backtest output (harness recreates on run)
+backtest_live_pipeline_trades.csv
