@@ -49,6 +49,13 @@ DRIFT_PF_30D_MIN     = 0.90
 DRIFT_DD_30D_MAX_PCT = 8.0
 REDESIGN_WR_90D_MIN  = 0.35
 REDESIGN_STREAK_DAYS = 60
+# A real spot/futures PF cannot sustain >~3. A higher value means the window
+# is being polluted by OPTION-PREMIUM %s (theta/IV swings) — i.e. the metric
+# itself is broken, NOT that the system is brilliant. Fire the alarm either way.
+IMPLAUSIBLE_PF_MAX   = 3.0
+# Below this many TRUSTWORTHY (spot/futures) closed trades the window is not
+# informative — report "insufficient data", never a false "healthy".
+MIN_CLEAN_TRADES_30D = 20
 
 
 def _load_journal(since: Optional[date] = None) -> List[Dict]:
@@ -86,26 +93,28 @@ def _signals_emitted_today() -> int:
 
 
 def _classify(row: Dict) -> str:
-    """Map journal row → WIN / LOSS / TIMEOUT.
+    """Map journal row → WIN / LOSS / TIMEOUT on the TRUSTWORTHY directional
+    result (spot/futures), not the option-premium outcome.
 
-    Explicit outcome tag takes precedence; for ambiguous tags (EXPIRED,
-    TIMEOUT, UNKNOWN) fall back to sign of pnl_pct.
+    Premium tags like TARGET_HIT/SL_HIT describe the OPTION leg (theta/IV
+    polluted). For a futures-mode system the spot move is what matters, so we
+    classify on the sign of the clean pnl (spot_pnl_pct, or pnl_pct for pure
+    futures rows). Falls back to the outcome tag only when no clean pnl exists.
+    BE_STOP / ~flat = TIMEOUT (scratch, neither win nor loss).
     """
+    pnl = _clean_pnl_pct(row)
+    if pnl is not None:
+        if pnl > 0.05:
+            return "WIN"
+        if pnl < -0.05:
+            return "LOSS"
+        return "TIMEOUT"
     out = (row.get("outcome") or row.get("status") or "").upper()
-    if out in ("WIN", "TARGET", "T1", "T2"):
+    if out in ("WIN", "TARGET", "TARGET_HIT", "T1", "T2"):
         return "WIN"
-    # BE_STOP = breakeven scratch (stop ratcheted to entry, exited ~flat).
-    # The backtest counts it as neither win nor loss; mirror that as TIMEOUT
-    # so WR/PF aren't penalised for a saved trade.
     if out == "BE_STOP":
         return "TIMEOUT"
-    if out in ("LOSS", "SL", "STOP"):
-        return "LOSS"
-    # Ambiguous tag → use pnl sign
-    pnl = _pnl_pct(row)
-    if pnl > 0.5:
-        return "WIN"
-    if pnl < -0.5:
+    if out in ("LOSS", "SL", "SL_HIT", "STOP"):
         return "LOSS"
     return "TIMEOUT"
 
@@ -116,6 +125,30 @@ def _pnl_pct(row: Dict) -> float:
         return float(v) if v is not None else 0.0
     except Exception:
         return 0.0
+
+
+def _clean_pnl_pct(row: Dict) -> Optional[float]:
+    """TRUSTWORTHY directional %% for a row, or None if not trustworthy.
+
+    Prefers spot_pnl_pct (theta/IV-denoised spot move). Accepts pnl_pct ONLY
+    for pure futures/spot rows (no option leg). Option-premium rows return
+    None so their huge premium swings can never inflate PF again — this is the
+    fix for the PF~16 mirage that blinded the drift alarm.
+    """
+    sp = row.get("spot_pnl_pct")
+    if sp is None:
+        extra = row.get("extra")
+        if isinstance(extra, dict):
+            sp = extra.get("spot_pnl_pct")
+    if sp is not None:
+        try:
+            return float(sp)
+        except Exception:
+            return None
+    instrument = str(row.get("instrument") or "").upper()
+    if row.get("entry_prem") is None and instrument in ("FUT", "FUTURE", "FUTURES", "SPOT"):
+        return _pnl_pct(row)
+    return None
 
 
 def _is_junk(row: Dict) -> bool:
@@ -137,26 +170,29 @@ def _window_stats(rows: List[Dict]) -> Dict:
     # Drop junk rows, then order by exit timestamp so cumulative equity (and
     # therefore drawdown) is chronological — not file-append order.
     rows = sorted((r for r in rows if not _is_junk(r)), key=_sort_key)
-    n = len(rows)
+    seen = len(rows)
+    # Only TRUSTWORTHY (spot/futures) rows count toward money stats. Option-
+    # premium rows are excluded so their theta/IV swings can't inflate PF.
+    clean = [(r, _clean_pnl_pct(r)) for r in rows]
+    clean = [(r, p) for r, p in clean if p is not None]
+    n = len(clean)
+    excluded_premium = seen - n
     if n == 0:
-        return {"signals": 0, "wr": 0.0, "pf": 0.0, "max_dd_pct": 0.0}
-    wins = [r for r in rows if _classify(r) == "WIN"]
-    losses = [r for r in rows if _classify(r) == "LOSS"]
+        return {"signals": 0, "wr": 0.0, "pf": 0.0, "max_dd_pct": 0.0,
+                "clean_n": 0, "excluded_premium": excluded_premium}
+    wins = [(r, p) for r, p in clean if _classify(r) == "WIN"]
+    losses = [(r, p) for r, p in clean if _classify(r) == "LOSS"]
     wr = len(wins) / max(n, 1)
-    gross_win = sum(_pnl_pct(r) for r in wins)
-    gross_loss = abs(sum(_pnl_pct(r) for r in losses))
+    gross_win = sum(p for _, p in wins)
+    gross_loss = abs(sum(p for _, p in losses))
     pf = gross_win / max(gross_loss, 0.001)
-    # Max drawdown on a FIXED-FRACTION equity curve. Raw pnl_pct is the
-    # per-trade return on premium (option leg) — those percentages do NOT add
-    # across trades (a +50% then -50% is not 0). Naive cumsum of 900 such
-    # rows produced -589% nonsense. Instead model each trade as risking a
-    # fixed 1% of equity: equity *= (1 + 0.01 * R_capped), where R_capped is
-    # the trade return clamped to a sane band (option can't lose >100%).
-    # This gives a compounding curve whose drawdown is in real equity %.
+    # Max drawdown on a FIXED-FRACTION equity curve from the clean directional
+    # %s (these are real spot/futures moves, so they compound honestly). Model
+    # each trade as risking ~1% of equity scaled by the move.
     equity = 100.0; peak = 100.0; mdd = 0.0
-    for r in rows:
-        ret = max(-100.0, min(200.0, _pnl_pct(r)))   # clamp premium-% outliers
-        equity *= (1 + 0.01 * (ret / 100.0))         # 1% equity risk per trade
+    for _, p in clean:
+        ret = max(-50.0, min(50.0, p))               # clamp pathological rows
+        equity *= (1 + 0.01 * (ret / 100.0))
         peak = max(peak, equity)
         if peak > 0:
             mdd = min(mdd, (equity - peak) / peak * 100)
@@ -165,6 +201,8 @@ def _window_stats(rows: List[Dict]) -> Dict:
         "wr": round(wr, 3),
         "pf": round(pf, 2),
         "max_dd_pct": round(mdd, 2),
+        "clean_n": n,
+        "excluded_premium": excluded_premium,
     }
 
 
@@ -225,8 +263,24 @@ def write_metrics(as_of: Optional[date] = None, force: bool = False) -> Dict:
     r30 = _window_stats(rows_30d)
     r90 = _window_stats(rows_90d)
 
-    # Drift / redesign signals
-    drift = (r30["pf"] < DRIFT_PF_30D_MIN) or (r30["max_dd_pct"] <= -DRIFT_DD_30D_MAX_PCT)
+    # Drift signals — now able to FIRE (the old version was blind because PF
+    # was computed on premium %s pinned near 16, never < 0.9).
+    drift = False
+    drift_reasons: List[str] = []
+    clean_n = r30.get("clean_n", r30.get("signals", 0))
+    if clean_n < MIN_CLEAN_TRADES_30D:
+        drift = True
+        drift_reasons.append(f"insufficient_clean_data_{clean_n}<{MIN_CLEAN_TRADES_30D}")
+    else:
+        if r30["pf"] < DRIFT_PF_30D_MIN:
+            drift = True
+            drift_reasons.append(f"pf_{r30['pf']}_below_{DRIFT_PF_30D_MIN}")
+        if r30["pf"] > IMPLAUSIBLE_PF_MAX:
+            drift = True
+            drift_reasons.append(f"pf_{r30['pf']}_IMPLAUSIBLE_metric_bug_or_bias")
+        if r30["max_dd_pct"] <= -DRIFT_DD_30D_MAX_PCT:
+            drift = True
+            drift_reasons.append(f"dd_{r30['max_dd_pct']}_exceeds_{DRIFT_DD_30D_MAX_PCT}")
 
     # Read prior metrics history to compute redesign streak
     prior_history: List[Dict] = []
@@ -250,7 +304,10 @@ def write_metrics(as_of: Optional[date] = None, force: bool = False) -> Dict:
         "win_rate": round(wr_today, 3),
         "rolling_30d": r30,
         "rolling_90d": r90,
+        "clean_trades_30d": clean_n,
+        "excluded_premium_30d": r30.get("excluded_premium", 0),
         "drift_alert": bool(drift),
+        "drift_reasons": drift_reasons,
         "redesign_alert": bool(redesign),
     }
 
@@ -263,8 +320,9 @@ def write_metrics(as_of: Optional[date] = None, force: bool = False) -> Dict:
         from core.health import alert
         if drift:
             alert("DRIFT",
-                  f"⚠️ DRIFT {today.isoformat()} — 30d PF {r30.get('pf')} "
-                  f"DD {r30.get('max_dd_pct')}%. Review before next session.")
+                  f"⚠️ DRIFT {today.isoformat()} — {'; '.join(drift_reasons)} "
+                  f"(30d PF {r30.get('pf')} DD {r30.get('max_dd_pct')}% "
+                  f"clean_n {clean_n}). Review before next session.")
         if redesign:
             alert("REDESIGN",
                   f"🛑 REDESIGN {today.isoformat()} — 60+ days of 90d WR "

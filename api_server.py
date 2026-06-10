@@ -268,7 +268,17 @@ def get_trades(days: int = 30):
 @app.get("/api/stats")
 def get_stats():
     trades = _read_trades()
-    return _compute_stats(trades)
+    stats = _compute_stats(trades)
+    # PERMANENT mirage guard: the rupee `pnl` above is option-PREMIUM-polluted
+    # (theta/IV), the source of the old PF~16 fantasy. Attach the trustworthy
+    # spot-based verdict from the single gate. The UI should PREFER `honest`, and
+    # when honest.trustworthy is False, show honest.note — never the premium PF.
+    try:
+        from core.honest_performance import from_journal
+        stats["honest"] = from_journal().as_dict()
+    except Exception as e:  # never let the guard break the endpoint
+        stats["honest"] = {"trustworthy": False, "note": f"honest_performance error: {e}"}
+    return stats
 
 
 @app.get("/api/health")

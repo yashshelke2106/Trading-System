@@ -86,6 +86,24 @@ def run_eod(quiet: bool = False) -> dict:
         summary["resolved"] = {"error": str(e)}
         log.warning(f"[EOD] check_outcomes failed: {e}")
 
+    # ── 1b. Make spot labels GAP-HONEST (overwrite premium-timed tracker marks) ─
+    #     so the learner/calibrator train on directional truth (did spot hit SL or
+    #     target), not exit-replay's premium-timed exits. Self-guards: diverts
+    #     instead of overwriting if the replay sanity check fails.
+    try:
+        from backfill_spot_outcomes import run_backfill
+        bf = run_backfill(inplace=True, force=True, quiet=True)
+        summary["spot_backfill"] = {
+            "coverage": bf.get("coverage_after"), "filled": bf.get("filled"),
+            "sanity_ok": bf.get("sanity_ok"), "diverted": bf.get("diverted"),
+            "pf": bf.get("profit_factor"),
+        }
+        if bf.get("diverted"):
+            log.warning("[EOD] spot backfill sanity FAILED — journal NOT overwritten")
+    except Exception as e:
+        summary["spot_backfill"] = {"error": str(e)}
+        log.warning(f"[EOD] spot backfill failed: {e}")
+
     # ── 2. Adaptive learner (gated on ≥20 resolved current-engine) ────
     try:
         from core.adaptive_learner import get_learner
@@ -121,11 +139,16 @@ def _emit(s: dict, quiet: bool) -> None:
     res = s.get("resolved", {})
     lrn = s.get("learner", {})
     cal = s.get("calibrator", {})
+    bf = s.get("spot_backfill", {})
+    bf_tag = (f"backfill cov={bf.get('coverage','?')}"
+              f"{' DIVERTED!' if bf.get('diverted') else ''}"
+              if "error" not in bf else "backfill ERR")
     line = (
         f"[EOD {s['ts']}] resolved T{res.get('target','?')}/"
         f"S{res.get('sl','?')}/X{res.get('expired','?')} | "
         f"closed={acc.get('closed',0)} open={acc.get('open',0)} "
         f"(T{acc.get('target',0)}/S{acc.get('sl',0)}/X{acc.get('time',0)}) | "
+        f"{bf_tag} | "
         f"learner d{lrn.get('params_changed',0)} | "
         f"calib {cal.get('mode','?')} n={cal.get('n','?')} | "
         f"{s.get('elapsed_s','?')}s"
