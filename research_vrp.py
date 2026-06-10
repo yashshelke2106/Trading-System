@@ -37,6 +37,11 @@ Run (your machine):
 from __future__ import annotations
 
 import argparse
+import sys
+try:                                  # Windows cp1252 chokes on ≈/⚠/→ in output
+    sys.stdout.reconfigure(encoding="utf-8")
+except Exception:
+    pass
 import warnings
 warnings.filterwarnings("ignore")
 import logging

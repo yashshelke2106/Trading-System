@@ -29,6 +29,9 @@ from core.dashboard_data import get_option_chain
 from core.nse_option_chain import validate_fno_universe
 
 _scan_count = 0
+# audit #4: india_swing is daily-close; generate once/day and hold (see _scan).
+_iswing_last_date = None
+_iswing_cache: list = []
 
 SCAN_INTERVAL_SEC = 15  # was 30 — halve latency for faster entry detection
 _OPEN  = (9, 15)
@@ -130,32 +133,59 @@ def _scan(engine, api, top_n, universe=None, orb_only=False, vol_only=False):
             for s in sigs:
                 s["strategy_origin"] = "legacy"
         else:
-            print(f'[{ts}] Scanning {len(universe)} symbols (india_swing 8-gate)...')
-            from core.strategy_india_swing import scan_universe_india_swing
-            sigs = scan_universe_india_swing(api, universe)
-            for s in sigs:
-                s["strategy_origin"] = "india_swing"
-            print(f'  [ISW] {len(sigs)} signals passed all 8 gates')
+            # FIX (audit #4): india_swing is a DAILY-CLOSE swing strategy — its
+            # own design says "decisions are made on the close." Re-running it
+            # every 15s on an INCOMPLETE daily bar produced unstable signals that
+            # flip intraday + journal churn + live≠backtest. Generate ONCE per
+            # trading day, then HOLD those signals all day (intraday price action
+            # is for the ORB/VOL paths, not this one).
+            #   - default: run on the first scan of a new day, reuse rest of day.
+            #   - config.ISWING_DECISION_TIME=(15,15): wait until the close so the
+            #     daily bar is complete before deciding (most correct).
+            #   - ISWING_INTRADAY_RERUN=1: revert to per-scan (old behavior).
+            global _iswing_last_date, _iswing_cache
+            now_dt = datetime.now()
+            today_str = now_dt.strftime('%Y-%m-%d')
+            cutoff = getattr(config, 'ISWING_DECISION_TIME', None)
+            after_cutoff = (cutoff is None) or ((now_dt.hour, now_dt.minute) >= tuple(cutoff))
+            rerun = os.environ.get('ISWING_INTRADAY_RERUN') == '1'
+            run_iswing = rerun or (_iswing_last_date != today_str
+                                   and (after_cutoff or not _market_open()))
+            if run_iswing:
+                print(f'[{ts}] Scanning {len(universe)} symbols (india_swing daily-close)...')
+                from core.strategy_india_swing import scan_universe_india_swing
+                sigs = scan_universe_india_swing(api, universe)
+                for s in sigs:
+                    s["strategy_origin"] = "india_swing"
+                print(f'  [ISW] {len(sigs)} signals passed all gates')
+                _iswing_last_date = today_str
+                _iswing_cache = list(sigs)
 
-            # Shadow-mode: run legacy engine and journal its candidates without
-            # enriching/emitting them. Compares both engines' raw output for WR.
-            if run_shadow:
-                try:
-                    shadow_sigs = engine.scan_universe(api, universe)
-                    print(f'  [SHADOW] legacy engine produced {len(shadow_sigs)} candidates')
+                # Shadow-mode: run legacy engine and journal its candidates without
+                # enriching/emitting them. Compares both engines' raw output for WR.
+                if run_shadow:
                     try:
-                        from core.signal_journal import record_signal as _record
-                        for ss in shadow_sigs:
-                            ss["strategy_origin"] = "legacy_shadow"
-                            ss["shadow"] = True
-                            try:
-                                _record(ss)
-                            except Exception:
-                                pass
-                    except Exception as _je:
-                        log.debug(f"shadow journal err: {_je}")
-                except Exception as _se:
-                    log.debug(f"shadow scan err: {_se}")
+                        shadow_sigs = engine.scan_universe(api, universe)
+                        print(f'  [SHADOW] legacy engine produced {len(shadow_sigs)} candidates')
+                        try:
+                            from core.signal_journal import record_signal as _record
+                            for ss in shadow_sigs:
+                                ss["strategy_origin"] = "legacy_shadow"
+                                ss["shadow"] = True
+                                try:
+                                    _record(ss)
+                                except Exception:
+                                    pass
+                        except Exception as _je:
+                            log.debug(f"shadow journal err: {_je}")
+                    except Exception as _se:
+                        log.debug(f"shadow scan err: {_se}")
+            else:
+                # never serve yesterday's signals before today's decision time
+                sigs = list(_iswing_cache) if _iswing_last_date == today_str else []
+                _cut = f"{cutoff[0]:02d}:{cutoff[1]:02d}" if cutoff else "first scan"
+                print(f"[{ts}] [ISW] daily-close strategy: holding {len(sigs)} signal(s) "
+                      f"(eval once/day @ {_cut}; ISWING_INTRADAY_RERUN=1 to override)")
 
         # Merge ORB signals — for symbols where ORB fired, prefer ORB over pattern signal
         if orb_sigs:
@@ -535,7 +565,10 @@ def _scan(engine, api, top_n, universe=None, orb_only=False, vol_only=False):
                 f'{s["reason"][:40]}'
             )
             if grade == 'S':
-                line += ' [~75-80% WR T1]'
+                # FIX (audit #15): removed the false "~75-80% WR" label. The
+                # journal showed Grade-S was the WORST bucket (11-25% spot WR),
+                # not the best. Grade is display-only; it does NOT predict WR.
+                line += ' [top score — grade does NOT predict WR]'
             setup_name = s.get("setup_name")
             if setup_name:
                 line += f' *** SETUP:{setup_name} WR={s.get("setup_wr",0):.0%}'
@@ -549,34 +582,39 @@ def _scan(engine, api, top_n, universe=None, orb_only=False, vol_only=False):
         try:
             th, sl, ex = check_outcomes()
             print(f'  [Tracker] outcomes: TARGET={th} SL={sl} EXPIRED={ex}')
-            changes = get_learner().maybe_update()
-            if changes:
-                print(f'  [Learner] {len(changes)} param(s) updated: {", ".join(changes.keys())}')
-            # Refresh setup detector combos from latest journal data
-            try:
-                from core.setup_detector import refresh_from_journal
-                n_setups = refresh_from_journal()
-                if n_setups:
-                    print(f'  [Setups] refreshed: {n_setups} auto-mined combos')
-            except Exception:
-                pass
-            # Refresh pattern quality weights from journal
-            try:
-                from core.pattern_quality import refresh_from_journal as refresh_pq
-                n_pq = refresh_pq()
-                if n_pq:
-                    print(f'  [PatternQ] refreshed: {n_pq} pattern qualities')
-            except Exception:
-                pass
-            # Reload learned params into running SignalEngine immediately — closes feedback loop
-            engine.engine.reload_learned_params()
-            lp = get_learner().get_learned_params()
-            sc = lp.get("SIGNAL_CONFIG", {})
-            if sc:
-                print(f'  [Learner] active: votes={sc.get("min_votes","?")} '
-                      f'strength={sc.get("min_strength","?")} '
-                      f'vol={sc.get("vol_surge_threshold","?")} '
-                      f'rsi_os={sc.get("rsi_oversold","?")}')
+            # FIX (audit #6): in-session self-tuning is FROZEN by default. It was
+            # refitting params to the biased journal every 10 scans = continuous
+            # overfitting to noise. Re-enable only via config.LEARNING_ENABLED
+            # after a real edge clears backtest_live_pipeline.py, and even then
+            # prefer OFFLINE refits with an out-of-sample holdout.
+            if getattr(config, "LEARNING_ENABLED", False):
+                changes = get_learner().maybe_update()
+                if changes:
+                    print(f'  [Learner] {len(changes)} param(s) updated: {", ".join(changes.keys())}')
+                try:
+                    from core.setup_detector import refresh_from_journal
+                    n_setups = refresh_from_journal()
+                    if n_setups:
+                        print(f'  [Setups] refreshed: {n_setups} auto-mined combos')
+                except Exception:
+                    pass
+                try:
+                    from core.pattern_quality import refresh_from_journal as refresh_pq
+                    n_pq = refresh_pq()
+                    if n_pq:
+                        print(f'  [PatternQ] refreshed: {n_pq} pattern qualities')
+                except Exception:
+                    pass
+                engine.engine.reload_learned_params()
+                lp = get_learner().get_learned_params()
+                sc = lp.get("SIGNAL_CONFIG", {})
+                if sc:
+                    print(f'  [Learner] active: votes={sc.get("min_votes","?")} '
+                          f'strength={sc.get("min_strength","?")} '
+                          f'vol={sc.get("vol_surge_threshold","?")} '
+                          f'rsi_os={sc.get("rsi_oversold","?")}')
+            else:
+                print('  [Learner] FROZEN (config.LEARNING_ENABLED=False) — no in-session param drift')
         except Exception as e:
             print(f'  [Tracker] error: {e}')
 

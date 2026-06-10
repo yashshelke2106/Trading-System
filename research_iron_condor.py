@@ -41,6 +41,11 @@ from __future__ import annotations
 
 import argparse
 import math
+import sys
+try:                                  # Windows cp1252 chokes on σ/≈/→ in output
+    sys.stdout.reconfigure(encoding="utf-8")
+except Exception:
+    pass
 import warnings
 warnings.filterwarnings("ignore")
 import logging

@@ -71,11 +71,47 @@ class RiskEngine:
 
         return market_open <= now <= market_close
 
-    def check_daily_loss(self) -> bool:
-        # Only realized losses should count toward the daily stop.
-        realized_loss = max(-self.daily_pnl, 0.0)
-        daily_loss_pct = realized_loss / self.capital if self.capital > 0 else 0
+    def unrealized_pnl(self, mark_prices: Optional[Dict[str, float]] = None) -> float:
+        """Open-position MTM at the given marks. 0.0 if no marks supplied."""
+        if not mark_prices:
+            return 0.0
+        total = 0.0
+        for pos in self.positions:
+            px = mark_prices.get(pos.symbol)
+            if px is None:
+                continue
+            if pos.direction == "long":
+                total += (px - pos.entry_price) * pos.quantity
+            else:
+                total += (pos.entry_price - px) * pos.quantity
+        return total
+
+    def check_daily_loss(self, mark_prices: Optional[Dict[str, float]] = None) -> bool:
+        # FIX (audit #18): the daily kill-switch must see OPEN losses too — a book
+        # bleeding on open positions used to keep opening new trades. When marks
+        # are supplied we include unrealized MTM; otherwise realized-only (legacy).
+        total_pnl = self.daily_pnl + self.unrealized_pnl(mark_prices)
+        loss = max(-total_pnl, 0.0)
+        daily_loss_pct = loss / self.capital if self.capital > 0 else 0
         return daily_loss_pct < self.config['max_daily_loss']
+
+    def check_correlation(self, symbol: str,
+                          sector_map: Optional[Dict[str, str]] = None) -> bool:
+        """FIX (audit #17): cap simultaneous correlated exposure. True if opening
+        `symbol` would NOT exceed max_per_sector open positions in its sector.
+        Degrades open when sector is unknown."""
+        if not symbol:
+            return True
+        max_per_sector = int(self.config.get('max_per_sector', 2))
+        if max_per_sector <= 0:
+            return True
+        sector_map = sector_map or getattr(config, 'STOCK_SECTOR_MAP', {})
+        sec = sector_map.get(symbol.upper())
+        if not sec:
+            return True  # unmapped → don't block
+        open_in_sector = sum(1 for p in self.positions
+                             if sector_map.get(p.symbol.upper()) == sec)
+        return open_in_sector < max_per_sector
 
     def check_consecutive_losses(self) -> bool:
         return self.consecutive_losses < self.config['max_consecutive_losses']
@@ -99,11 +135,12 @@ class RiskEngine:
             self.symbol_stops_today.clear()   # v4 fix#5: fresh slate
             self.last_reset = today
 
-    def can_trade(self, symbol: str = "", force_allowed: bool = False) -> bool:
+    def can_trade(self, symbol: str = "", force_allowed: bool = False,
+                  mark_prices: Optional[Dict[str, float]] = None) -> bool:
         self._auto_reset_if_new_day()
         if not self.check_market_hours(force_allowed):
             return False
-        if not self.check_daily_loss():
+        if not self.check_daily_loss(mark_prices):   # audit #18: includes open MTM
             return False
         if not self.check_consecutive_losses():
             return False
@@ -111,6 +148,9 @@ class RiskEngine:
             return False
         # v4 fix#5: per-symbol re-entry block (only enforced when symbol given)
         if symbol and not self.check_symbol_not_stopped(symbol):
+            return False
+        # audit #17: correlation/concentration cap (only enforced when symbol given)
+        if symbol and not self.check_correlation(symbol):
             return False
         return True
 

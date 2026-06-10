@@ -170,6 +170,17 @@ def is_blackout(symbol: str, blackout_days: int = EARNINGS_BLACKOUT_DAYS
     """
     nxt = get_next_earnings(symbol)
     if nxt is None:
+        # FIX (audit #9): no data means we CANNOT confirm the stock isn't about
+        # to report. The feed is currently dead, so this path is the norm, not
+        # the exception — trading here is unhedged gap risk. Fail closed when
+        # config.REQUIRE_EARNINGS_DATA is set.
+        try:
+            import config as _cfg
+            if bool(getattr(_cfg, "REQUIRE_EARNINGS_DATA", False)):
+                return True, {"reason": "no_earnings_data_fail_closed",
+                              "next_earnings": None}
+        except Exception:
+            pass
         return False, {"reason": "no_earnings_data", "next_earnings": None}
     try:
         next_dt = date.fromisoformat(nxt)
