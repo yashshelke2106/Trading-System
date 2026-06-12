@@ -18,6 +18,11 @@ from datetime import datetime, date
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+try:                                  # Windows cp1252 chokes on the ✅/❌/⏱ icons
+    sys.stdout.reconfigure(encoding="utf-8")
+except Exception:
+    pass
+
 try:
     import config
 except Exception:

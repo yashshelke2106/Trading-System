@@ -163,7 +163,12 @@ class RiskEngine:
         if risk_per_share == 0:
             return 0
         raw_qty = int(risk_amount / risk_per_share)
-        lot_size = getattr(config, 'NSE_LOT_SIZES', {}).get(symbol, 1)
+        # Prefer the LIVE lot size (scrip master) over the stale static map.
+        try:
+            from core.futures_leg import lot_size_for as _lsf
+            lot_size = _lsf(symbol) if symbol else 1
+        except Exception:
+            lot_size = getattr(config, 'NSE_LOT_SIZES', {}).get(symbol, 1)
         if lot_size <= 1:
             return max(1, raw_qty)
         # round down to nearest lot; ensure at least 1 lot

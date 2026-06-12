@@ -126,9 +126,82 @@ _YF_TICKER_MAP = {
 _INTRADAY_CACHE: Dict = {}
 _INTRADAY_CACHE_TTL = 60          # seconds (5m bars refresh every 5min)
 _DAILY_CACHE: Dict = {}
-_DAILY_CACHE_TTL = 3600           # 1 hour (daily bars update once/day)
+_DAILY_CACHE_TTL = 3600           # legacy fallback; session-aware expiry below wins
+
+
+def _daily_cache_expiry_epoch() -> float:
+    """Epoch when currently-cached DAILY bars become stale.
+
+    A daily-bars response can only meaningfully change at two moments:
+    the session open (~09:20 IST, today's forming bar appears) and just
+    after the close (~15:35 IST, the bar completes). Re-fetching 152
+    symbols' full history every hour was the #1 source of Dhan 429
+    storms — this caps daily refetches at ~2/symbol/day.
+    """
+    import time as _time
+    from datetime import datetime, timedelta, timezone
+    ist = timezone(timedelta(hours=5, minutes=30))
+    now = datetime.now(ist)
+    boundaries = []
+    for h, m in ((9, 20), (15, 35)):
+        b = now.replace(hour=h, minute=m, second=0, microsecond=0)
+        if b <= now:
+            b += timedelta(days=1)
+        boundaries.append(b)
+    return min(boundaries).timestamp()
 
 _API_SINGLETON = None
+
+# ── Cross-process 429 backoff ────────────────────────────────────────────────
+# The class-level backoff attrs are PROCESS-LOCAL. The aladdin runner spawns
+# several python processes sharing ONE Dhan key — each tripped its own backoff
+# while the others kept hammering, so the "global 30s backoff" never actually
+# stopped the storm. This file shares the backoff clock across all processes.
+_BACKOFF_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                             "logs", "dhan_backoff.json")
+_backoff_read_cache = {"ts": 0.0, "data": {}}
+
+
+def _shared_backoff_get(kind: str) -> float:
+    """Epoch until which `kind` ('chart'|'oc') is backed off, across processes.
+    File read at most once/second per process."""
+    import time as _time
+    now = _time.time()
+    if now - _backoff_read_cache["ts"] > 1.0:
+        try:
+            import json as _json
+            with open(_BACKOFF_FILE, encoding="utf-8") as f:
+                _backoff_read_cache["data"] = _json.load(f)
+        except Exception:
+            _backoff_read_cache["data"] = {}
+        _backoff_read_cache["ts"] = now
+    try:
+        return float(_backoff_read_cache["data"].get(kind, 0.0))
+    except Exception:
+        return 0.0
+
+
+def _shared_backoff_set(kind: str, until: float) -> None:
+    """Publish a backoff so every process honors it. Best-effort."""
+    try:
+        import json as _json
+        data = {}
+        try:
+            with open(_BACKOFF_FILE, encoding="utf-8") as f:
+                data = _json.load(f)
+        except Exception:
+            pass
+        if until > float(data.get(kind, 0.0) or 0.0):
+            data[kind] = until
+            os.makedirs(os.path.dirname(_BACKOFF_FILE), exist_ok=True)
+            tmp = _BACKOFF_FILE + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                _json.dump(data, f)
+            os.replace(tmp, _BACKOFF_FILE)
+        _backoff_read_cache["data"][kind] = max(
+            until, float(_backoff_read_cache["data"].get(kind, 0.0) or 0.0))
+    except Exception:
+        pass
 
 # Data-staleness tracking: timestamp of the last NON-EMPTY Dhan fetch. With
 # yfinance gone, Dhan is the single source — if it goes silent mid-session we
@@ -172,6 +245,10 @@ def dhan_intraday(symbol: str, interval_min: int = 5, days_back: int = 5) -> pd.
         logging.getLogger(__name__).warning("dhan_intraday %s failed: %s", symbol, e)
         df = pd.DataFrame()
     df = df if isinstance(df, pd.DataFrame) else pd.DataFrame()
+    if not df.empty and "date" in df.columns:
+        # Dhan occasionally returns duplicate-date rows; drop them at the source
+        # so downstream panel/reindex code can't crash ("duplicate labels").
+        df = df.drop_duplicates(subset="date", keep="last")
     if not df.empty:
         _mark_data_ok()
     _INTRADAY_CACHE[key] = (_time.time(), df)
@@ -190,7 +267,9 @@ def dhan_daily(symbol: str, days_back: int = 365) -> pd.DataFrame:
         return pd.DataFrame()
     key = (symbol.upper(), days_back)
     cached = _DAILY_CACHE.get(key)
-    if cached and (_time.time() - cached[0]) < _DAILY_CACHE_TTL:
+    # Session-aware expiry: entry stores the epoch it becomes stale at
+    # (open/close boundary), NOT a fixed TTL. See _daily_cache_expiry_epoch.
+    if cached and _time.time() < cached[0]:
         return cached[1]
     try:
         df = _get_singleton().get_historical_data(symbol, from_date=days_back)
@@ -198,9 +277,18 @@ def dhan_daily(symbol: str, days_back: int = 365) -> pd.DataFrame:
         logging.getLogger(__name__).warning("dhan_daily %s failed: %s", symbol, e)
         df = pd.DataFrame()
     df = df if isinstance(df, pd.DataFrame) else pd.DataFrame()
+    if not df.empty and "date" in df.columns:
+        # Dhan occasionally returns duplicate-date rows; drop them at the source
+        # so downstream panel/reindex code can't crash ("duplicate labels").
+        df = df.drop_duplicates(subset="date", keep="last")
     if not df.empty:
         _mark_data_ok()
-    _DAILY_CACHE[key] = (_time.time(), df)
+        # Cache until the next session boundary (open/close). Empty results get
+        # only a short retry window so a transient 429 doesn't blank a symbol
+        # for the whole session.
+        _DAILY_CACHE[key] = (_daily_cache_expiry_epoch(), df)
+    else:
+        _DAILY_CACHE[key] = (_time.time() + 120, df)
     return df
 
 
@@ -453,8 +541,10 @@ class DhanAPI:
             return
         import time as _t
         now = _t.time()
-        if now < DhanAPI._chart_backoff_until:
-            _t.sleep(DhanAPI._chart_backoff_until - now)
+        # Honor BOTH the process-local and the cross-process shared backoff.
+        until = max(DhanAPI._chart_backoff_until, _shared_backoff_get("chart"))
+        if now < until:
+            _t.sleep(until - now)
             now = _t.time()
         elapsed = now - DhanAPI._chart_last_call
         if elapsed < DhanAPI._CHART_RATE_LIMIT:
@@ -488,13 +578,16 @@ class DhanAPI:
                 # entire scan loop stops hammering instead of looping retries.
                 if "/optionchain" in endpoint:
                     DhanAPI._oc_backoff_until = _t.time() + 30
+                    _shared_backoff_set("oc", DhanAPI._oc_backoff_until)
                     log.warning(f"Dhan 429 on option chain — global 30s backoff set")
                 if "/charts/" in endpoint:
                     # Honor Retry-After if Dhan sent one, else 30s — short
                     # windows (10s) bounced straight back into 429s in testing
                     chart_wait = max(wait, 30.0)
                     DhanAPI._chart_backoff_until = _t.time() + chart_wait
-                    log.warning(f"Dhan 429 on charts — global {chart_wait:.0f}s backoff set")
+                    _shared_backoff_set("chart", DhanAPI._chart_backoff_until)
+                    log.warning(f"Dhan 429 on charts — global {chart_wait:.0f}s backoff set "
+                                f"(shared across processes)")
                 _t.sleep(min(wait, 5))
                 return self._request(method, endpoint, data, _retry=False,
                                      _use_data_session=_use_data_session)
@@ -755,8 +848,9 @@ class DhanAPI:
 
         # ── Global 429 backoff: when Dhan recently rate-limited, skip all
         #    option chain calls for 30s instead of compounding the abuse.
+        #    Honors the CROSS-PROCESS shared backoff too (logs/dhan_backoff.json).
         now = _t.time()
-        if now < DhanAPI._oc_backoff_until:
+        if now < max(DhanAPI._oc_backoff_until, _shared_backoff_get("oc")):
             log.debug(f"option chain {symbol}: in 429 backoff window, skipping")
             return []
 

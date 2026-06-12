@@ -71,6 +71,9 @@ ATR_LEN               = 14
 # Set PRECISION_MODE=False env to revert to permissive v2 thresholds.
 import os
 PRECISION_MODE = os.environ.get("PRECISION_MODE", "1") != "0"
+# Fail CLOSED (skip the trade) when an advanced gate's module errors, instead of
+# silently passing. Default off; gate errors are logged LOUD (warning) either way.
+GATES_FAIL_CLOSED = os.environ.get("GATES_FAIL_CLOSED", "0") == "1"
 
 if PRECISION_MODE:
     # NOTE: an earlier v4 tune cut RSI_LONG_MAX to 60 citing "RSI 50-60 = 55%
@@ -684,7 +687,9 @@ def generate_signal_india_swing(
             log.debug(f"[ISW] {symbol} KILL g6: {g6.get('reason')}")
             return None
     except Exception as e:
-        log.debug(f"[ISW] {symbol} g6 skipped (sector module err): {e}")
+        log.warning(f"[ISW] {symbol} g6 ERROR (sector module): {e}")
+        if GATES_FAIL_CLOSED:
+            return None
         g6 = {"sector_skipped": True}
         gate_results["g6_sector"] = True
 
@@ -697,7 +702,9 @@ def generate_signal_india_swing(
             log.debug(f"[ISW] {symbol} KILL g7: {g7.get('reason')}")
             return None
     except Exception as e:
-        log.debug(f"[ISW] {symbol} g7 skipped (earnings module err): {e}")
+        log.warning(f"[ISW] {symbol} g7 ERROR (earnings module): {e}")
+        if GATES_FAIL_CLOSED:
+            return None
         g7 = {"earnings_skipped": True}
         gate_results["g7_earnings"] = True
 
@@ -710,7 +717,9 @@ def generate_signal_india_swing(
             log.debug(f"[ISW] {symbol} KILL g8: {g8.get('reason')}")
             return None
     except Exception as e:
-        log.debug(f"[ISW] {symbol} g8 skipped (delivery module err): {e}")
+        log.warning(f"[ISW] {symbol} g8 ERROR (delivery module): {e}")
+        if GATES_FAIL_CLOSED:
+            return None
         g8 = {"delivery_skipped": True}
         gate_results["g8_delivery"] = True
 
@@ -730,7 +739,9 @@ def generate_signal_india_swing(
                 log.debug(f"[ISW] {symbol} KILL g9: {g9.get('reason')}")
                 return None
         except Exception as e:
-            log.debug(f"[ISW] {symbol} g9 skipped (sector_leader module err): {e}")
+            log.warning(f"[ISW] {symbol} g9 ERROR (sector_leader module): {e}")
+            if GATES_FAIL_CLOSED:
+                return None
             g9 = {"sector_leader_skipped": True}
             gate_results["g9_sector_leader"] = True
 
@@ -815,7 +826,9 @@ def generate_signal_india_swing(
                 log.debug(f"[ISW] {symbol} KILL g10: {g10.get('reason')}")
                 return None
         except Exception as e:
-            log.debug(f"[ISW] {symbol} g10 skipped (ml_filter err): {e}")
+            log.warning(f"[ISW] {symbol} g10 ERROR (ml_filter): {e}")
+            if GATES_FAIL_CLOSED:
+                return None
             gate_results["g10_ml"] = True
 
     reason = (f"10-gate clean | trend={direction} ema20={g1['ema20']:.1f}>{g1['ema50']:.1f} "

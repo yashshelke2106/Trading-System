@@ -7,6 +7,11 @@ from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+try:                                  # Windows cp1252 chokes on the ✅/⚠ icons we print
+    sys.stdout.reconfigure(encoding="utf-8")
+except Exception:
+    pass
+
 import logging as _logging
 
 class _DelistedFilter(_logging.Filter):

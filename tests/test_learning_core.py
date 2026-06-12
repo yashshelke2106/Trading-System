@@ -289,10 +289,16 @@ def test_finalize_keeps_positive_expectancy_drops_negative(monkeypatch):
             return 0.55 if score >= 100 else 0.05
 
     monkeypatch.setattr(C, "get_calibrator", lambda: _FakeCal())
+    # Deterministic: don't depend on the live NIFTY regime or the wall-clock hour
+    # (finalize blocks low-vol signals in a 'choppy' regime and during death hours).
+    monkeypatch.setattr(F, "_get_cached_regime", lambda: "neutral")
+    monkeypatch.setattr(F, "DEATH_HOURS", set())
     good = {"symbol": "G", "confluence_score": 110, "entry_price": 100,
-            "sl_price": 98, "target_price": 106, "reason": "r"}      # rr=3
+            "sl_price": 98, "target_price": 106, "reason": "r",
+            "volume_ratio": 2.0}                                    # rr=3
     bad = {"symbol": "B", "confluence_score": 40, "entry_price": 100,
-           "sl_price": 99, "target_price": 101, "reason": "r"}       # rr=1
+           "sl_price": 99, "target_price": 101, "reason": "r",
+           "volume_ratio": 2.0}                                     # rr=1
     out = F.finalize_and_select([good, bad])
     syms = [s["symbol"] for s in out]
     assert "G" in syms and "B" not in syms

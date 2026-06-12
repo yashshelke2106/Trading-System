@@ -374,10 +374,15 @@ def _start_scan_loop(force: bool, top_n: int = 10) -> threading.Thread:
                             th, sl_h, ex = check_outcomes()
                             if th or sl_h or ex:
                                 log.info(f"[Tracker] TARGET={th} SL={sl_h} EXPIRED={ex}")
-                            changes = get_learner().maybe_update()
-                            if changes:
-                                log.info(f"[Learner] {len(changes)} param(s) updated")
-                            engine.engine.reload_learned_params()
+                            # audit #6 parity with scan_only_v2: in-session
+                            # self-tuning stays FROZEN unless explicitly enabled
+                            # in config — this loop was bypassing the freeze.
+                            import config as _cfg
+                            if getattr(_cfg, "LEARNING_ENABLED", False):
+                                changes = get_learner().maybe_update()
+                                if changes:
+                                    log.info(f"[Learner] {len(changes)} param(s) updated")
+                                engine.engine.reload_learned_params()
                         except Exception as e:
                             log.warning(f"[Tracker/Learner] {e}")
                 except Exception as e:
@@ -602,6 +607,19 @@ def main():
                 if not coord._post_market_done_today:
                     coord._trigger_post_market()
                     coord._post_market_done_today = True
+                # Daily honest-metrics rollup (was wired to the legacy
+                # signal_tracker close path; this runner is the EOD trigger
+                # now). Idempotent per day; failure must not block shutdown.
+                try:
+                    from core.metrics_writer import write_metrics
+                    rec = write_metrics()
+                    r30 = rec.get("rolling_30d", {})
+                    print(f"[Metrics] {rec.get('date')} written: 30d WR {r30.get('wr')} "
+                          f"PF {r30.get('pf')} DD {r30.get('max_dd_pct')}% "
+                          f"| drift={rec.get('drift_alert')} "
+                          f"reasons={rec.get('drift_reasons')}")
+                except Exception as e:
+                    print(f"[Metrics] rollup failed (non-fatal): {e}")
                 break
             continue
 

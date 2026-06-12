@@ -40,6 +40,9 @@ _eq_by_symbol: Optional[Dict[str, str]] = None
 _idx_by_symbol: Optional[Dict[str, str]] = None
 # Option index: key = (UNDERLYING, expiry_YYYYMMDD, strike, "CE"|"PE")
 _opt_by_key: Optional[Dict[tuple, str]] = None
+# F&O lot size per underlying (LIVE source of truth; config.NSE_LOT_SIZES is a
+# static fallback that goes stale — NSE revises lot sizes periodically).
+_lot_by_symbol: Optional[Dict[str, int]] = None
 _loaded_at: float = 0.0
 
 
@@ -78,7 +81,7 @@ def _download() -> bool:
 
 def _build_indexes() -> None:
     """Parse the CSV into eq_by_symbol + idx_by_symbol + opt_by_key dicts."""
-    global _eq_by_symbol, _idx_by_symbol, _opt_by_key, _loaded_at
+    global _eq_by_symbol, _idx_by_symbol, _opt_by_key, _lot_by_symbol, _loaded_at
 
     if _need_refresh():
         _download()
@@ -86,12 +89,14 @@ def _build_indexes() -> None:
         _eq_by_symbol = {}
         _idx_by_symbol = {}
         _opt_by_key = {}
+        _lot_by_symbol = {}
         _loaded_at = time.time()
         return
 
     eq: Dict[str, str] = {}
     idx: Dict[str, str] = {}
     opt: Dict[tuple, str] = {}
+    lot: Dict[str, int] = {}
 
     try:
         with open(_CACHE_PATH, "r", encoding="utf-8", errors="replace", newline="") as f:
@@ -106,6 +111,18 @@ def _build_indexes() -> None:
                     continue
                 if exch not in ("NSE", "BSE"):
                     continue
+
+                # LIVE F&O lot size per underlying (from any derivative row).
+                if inst in ("OPTSTK", "OPTIDX", "FUTSTK", "FUTIDX"):
+                    und = sym.split("-")[0].upper() if "-" in sym else _clean_symbol(sym)
+                    lot_raw = (row.get("SEM_LOT_UNITS") or row.get("SEM_LOT_SIZE")
+                               or row.get("LOT_SIZE") or "")
+                    try:
+                        lv = int(float(lot_raw))
+                        if und and lv > 0:
+                            lot.setdefault(und, lv)
+                    except Exception:
+                        pass
 
                 if inst == "EQUITY" and exch == "NSE":
                     clean = _clean_symbol(sym)
@@ -142,12 +159,15 @@ def _build_indexes() -> None:
     _eq_by_symbol = eq
     _idx_by_symbol = idx
     _opt_by_key = opt
+    _lot_by_symbol = lot
     _loaded_at = time.time()
-    logger.info(f"scrip master indexed: {len(eq)} EQUITY, {len(idx)} INDEX, {len(opt)} OPTIONS")
+    logger.info(f"scrip master indexed: {len(eq)} EQUITY, {len(idx)} INDEX, "
+                f"{len(opt)} OPTIONS, {len(lot)} F&O lot sizes")
 
 
 def _ensure_loaded() -> None:
-    if _eq_by_symbol is None or _idx_by_symbol is None or _opt_by_key is None:
+    if (_eq_by_symbol is None or _idx_by_symbol is None
+            or _opt_by_key is None or _lot_by_symbol is None):
         _build_indexes()
 
 
@@ -198,12 +218,26 @@ def lookup(symbol: str) -> Optional[str]:
     return None
 
 
+def lot_size(symbol: str) -> Optional[int]:
+    """LIVE F&O lot size for an underlying from the Dhan scrip master, or None.
+    Preferred over the static config.NSE_LOT_SIZES, which goes stale whenever
+    NSE revises lot sizes. Callers should fall back to the static map then 1."""
+    if not symbol:
+        return None
+    _ensure_loaded()
+    if not _lot_by_symbol:
+        return None
+    return _lot_by_symbol.get(_clean_symbol(symbol))
+
+
 def force_refresh() -> bool:
     """Re-download CSV, rebuild indexes. Returns True on success."""
-    global _eq_by_symbol, _idx_by_symbol
+    global _eq_by_symbol, _idx_by_symbol, _opt_by_key, _lot_by_symbol
     ok = _download()
     _eq_by_symbol = None
     _idx_by_symbol = None
+    _opt_by_key = None
+    _lot_by_symbol = None
     if ok:
         _build_indexes()
     return ok

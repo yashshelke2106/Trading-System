@@ -1,244 +1,82 @@
-# TRADING SYSTEM - COMPLETE STRATEGY DOCUMENTATION v3.0
+# Trading System — Strategy Documentation (v4, 2026-06-10)
 
-## System Architecture Overview
+> Rewritten to match the **actual running code**. The previous v3 doc described
+> a dead options pipeline ("65-70% WR 1:3", AI-filter thresholds) that no longer
+> exists. For the full audit, edge findings, and ratings see
+> **`AUDIT_AND_EDGE_HUNT.md`**.
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                    TRADING PIPELINE                               │
-├─────────────────────────────────────────────────────────────────┤
-│  1. Scanner        → 2. Market Bias   → 3. Time Filter          │
-│         ↓                  ↓                    ↓               │
-│  4. Signal Engine  → 5. Volatility VIL → 6. Fake Breakout Filter │
-│         ↓                  ↓                    ↓               │
-│  7. Order Flow     → 8. Strike Selection → 9. AI Filter         │
-│         ↓                  ↓                    ↓               │
-│ 10. Trade Ranker   → 11. Risk Engine  → 12. Execution            │
-└─────────────────────────────────────────────────────────────────┘
-```
+## Current mode (what actually runs)
 
----
+- **Instrument:** stock **FUTURES** (`config.INSTRUMENT_MODE="futures"`). The
+  options era was abandoned — premium decay/IV were killing stops while the
+  spot direction was often right.
+- **Strategy:** `core/strategy_india_swing.py` — a daily-close swing strategy,
+  evaluated **once per day** (`config.ISWING_DECISION_TIME`), not intraday.
+- **Execution:** `PAPER_TRADE=True`. Signal-only — the scanner writes
+  `logs/signals.json`; a human reviews/executes manually. **No real orders.**
+- **Honest status:** no validated, cost-surviving, out-of-sample edge has been
+  found (directional or volatility). The system is a *paper-research platform*,
+  not a deployable money-maker. Do **not** loosen the gates to manufacture
+  trades — trade scarcity is the symptom of no edge, not a bug.
 
-## CORE MODULES (9 Original)
-
-### MODULE 1: LIQUIDITY SCANNER
-- Volume >= 1M, Turnover >= 5M, Delivery % >= 10%
-- Sort by volume, take top 15
-
-### MODULE 2: SIGNAL ENGINE
-- Breakout, Trend, Range detection via ATR + SMA
-- Signal strength >= 20
-
-### MODULE 3: FAKE BREAKOUT FILTER
-- Body ratio > 50%, Follow-through >= 2 candles, Rejections < 4
-
-### MODULE 4: ORDER FLOW ANALYSIS
-- Aggression (trade), Neutral (maybe), Absorption/Exhaustion (avoid)
-
-### MODULE 5: VOLATILITY VIL
-- LOW = avoid, NORMAL = full, HIGH = half size
-
-### MODULE 6: STRIKE SELECTION
-- HIGH vol = ITM, NORMAL = ATM, LOW = avoid options
-
-### MODULE 7: AI FILTER
-- Probability >= 70% = full, 50-70% = half, < 50% = skip
-
-### MODULE 8: RISK ENGINE
-- 2% per trade, 5% daily loss, 4 consecutive loss pause
-
-### MODULE 9: EXECUTION ENGINE
-- Limit orders, slippage control, trailing SL
-
----
-
-## NEW MODULES (Phase A - Context & Selection)
-
----
-
-## MODULE 10: MARKET BIAS ENGINE
-
-### Purpose
-Understand market-wide direction before individual trades
-
-### Bias States
-| Bias | Condition | Trade Action |
-|------|-----------|-------------|
-| STRONG_LONG | Both indices strong up | Favor LONG |
-| LONG_BIAS | NIFTY up | Partial LONG |
-| NEUTRAL | Mixed signals | Any direction |
-| SHORT_BIAS | NIFTY down | Partial SHORT |
-| STRONG_SHORT | Both indices down | Favor SHORT |
-
-### Logic
-```python
-nifty_trend, bank_trend = analyze_trends()
-
-if nifty_trend == STRONG_UP and bank_trend == STRONG_UP:
-    bias = STRONG_LONG
-elif nifty_trend == STRONG_DOWN and bank_trend == STRONG_DOWN:
-    bias = STRONG_SHORT
-```
-
-### Signal Filtering
-- STRONG_LONG + SHORT signal = REJECT
-- STRONG_SHORT + LONG signal = REJECT
-- Otherwise = proceed with adjusted confidence
-
----
-
-## MODULE 11: TIME FILTER
-
-### Session Rules
-| Session | Time | Trade Mult | Best For |
-|---------|------|------------|----------|
-| OPEN | 09:15-09:30 | 0.5x | Avoid |
-| FIRST_HOUR | 09:30-10:30 | 1.0x | Best |
-| DEAD_ZONE | 11:30-13:30 | 0.3x | No new |
-| POWER_HOUR | 14:30-15:15 | 1.2x | Breakouts |
-| CLOSE | 15:15-15:30 | 0.5x | Close only |
-
-### Logic
-```python
-session = get_session()
-
-if session == DEAD_ZONE and not strong_breakout:
-    return False
-    
-if session == POWER_HOUR:
-    return True
-```
-
----
-
-## MODULE 12: TRADE RANKER
-
-### Scoring System (7 Components)
-| Component | Weight | Score Basis |
-|-----------|--------|-------------|
-| Liquidity | 15% | Volume + delivery |
-| Signal Strength | 20% | Strength score |
-| Volatility | 10% | Regime fit |
-| Order Flow | 20% | Flow type |
-| Breakout Quality | 15% | Quality score |
-| Market Bias | 10% | Index alignment |
-| Time Filter | 10% | Session fit |
-
-### Verdict Thresholds
-| Score | Verdict |
-|-------|---------|
-| >= 0.75 | EXCELLENT |
-| 0.60-0.74 | GOOD |
-| 0.45-0.59 | AVERAGE |
-| < 0.45 | AVOID |
-
-### Ranking Logic
-```python
-total = sum(component * weight)
-ranked = sorted(signals, key=total, reverse=True)
-return ranked[:3]  # Top 3 only
-```
-
----
-
-## MODULE 13: LIQUIDITY SPIKE DETECTION
-
-### Spike Detection
-```python
-spike_ratio = recent_vol / avg_vol
-if spike_ratio >= 1.8:
-    spike_detected = True
-```
-
-### Spike Types
-| Type | Price Move | Interpretation |
-|------|------------|----------------|
-| TREND_DRIVEN | >2% | Real breakout |
-| ACCUMULATION | <0.5% | Institutions buying |
-| NEWS_DRIVEN | >3% | Event-driven |
-| DISTRIBUTION | Price down | Selling pressure |
-
-### Priority Adjustment
-- TREND_DRIVEN: 1.3x score
-- NEWS_DRIVEN: 0.8x score
-- ACCUMULATION: 1.1x score
-
----
-
-## MODULE 14: LOSS CLUSTER CONTROL
-
-### Position Sizing
-| Loss Streak | Position Mult |
-|-------------|---------------|
-| 0-1 | 1.0x (normal) |
-| 2 | 0.75x |
-| 3 | 0.50x |
-| 4+ | PAUSE 30 min |
-
----
-
-## MODULE 15: EXECUTION REFINEMENT
-
-### Entry Types
-| Type | Condition | Action |
-|------|-----------|--------|
-| DIRECT | VWAP aligned | Enter now |
-| PULLBACK | Retraced 0.3 ATR | Enter pullback |
-| WAIT_VWAP | Away from VWAP | Wait |
-| AVOID | No valid setup | Skip |
-
-### Multi-Timeframe
-```python
-if intraday_trend == daily_trend:
-    return 1.0  # Perfect alignment
-else:
-    return 0.5  # Reduce confidence
-```
-
----
-
-## COMPLETE PIPELINE FLOW
+## Pipeline (live)
 
 ```
-Scanner → Market Bias → Time Filter → Signals
-    ↓           ↓            ↓          ↓
-Volatility → Fake Breakout → Order Flow → Liquidity Spike
-    ↓           ↓              ↓           ↓
-Strikes → AI Filter → Bias Check → Rank (Top 3)
-    ↓           ↓              ↓          ↓
-Loss Cluster → Risk Check → Execution Refine → Execute
+scan_only_v2.py (once/day for india_swing)
+  → strategy_india_swing: G0 regime → G1 trend → G2 pullback → G3 confirm+vol
+       → G4 structural stop → G5 RSI/RS → G6 sector → G7 earnings
+       → G8 delivery → G9 sector-leader → G10 ML  (all must pass)
+  → futures_leg (attach lot/notional)  → entry_guard
+  → finalize_and_select (calibrate + sector cap + count cap)
+  → pullback_entry queue → monte_carlo enrich → R:R position sizing
+  → signal_writer → logs/signals.json
 ```
+Note: the ~11 gates in series make this **very** low-frequency by design
+(PRECISION_MODE ≈ 2 trades / 30 names / 2yr; full stack ≈ 0). That is expected.
 
----
+## Risk engine (`core/risk_engine.py`)
 
-## PERFORMANCE EXPECTATIONS
+- Risk/trade 1.2% of capital; daily-loss kill-switch **4%** (now includes open
+  MTM); max 2 consecutive losses; max 3 trades/day; per-symbol same-day
+  re-entry block; **sector correlation cap** (`max_per_sector=2`).
+- Stops: ATR×1.2 bounded to [1.0%, 2.5%] of entry; target by R:R (min 1.5).
+- Lot sizes: **live from the Dhan scrip master** (`core/scrip_master.lot_size`),
+  falling back to `config.NSE_LOT_SIZES`.
 
-| Scenario | Win Rate | Risk-Reward |
-|----------|----------|-------------|
-| All filters pass | 65-70% | 1:3 |
-| Most filters pass | 55-60% | 1:2 |
-| Basic filters only | 45-50% | 1:1.5 |
+## Measurement & monitoring (the honest layer — the system's strongest part)
 
----
+- `core/metrics_writer.py` — daily metrics on the **trustworthy** directional
+  pnl (option-premium rows excluded); drift alarm fires on PF<0.9, PF>3
+  (implausible), DD>8%, or <20 clean trades.
+- `honest_metrics.py` — re-score the live journal honestly.
+- In-session self-tuning is **frozen** (`config.LEARNING_ENABLED=False`).
 
-## SYSTEM VERSION HISTORY
+## Research / rigor harnesses (run on your machine; Dhan-only data)
 
-### v1.0 - Foundation
-Scanner + Signal + Filters
+| File | What it tests |
+|---|---|
+| `backtest_live_pipeline.py` | gap-honest, point-in-time, live-parity backtest (`--selftest` offline) |
+| `edge_research.py` / `edge_hunt.py` | momentum / trend / mean-rev / overnight / low-vol / seasonality / VIX battery |
+| `validate_meanrev.py` (+`_liquid`) | RSI-2 mean-reversion with a cost sweep |
+| `pairs_program.py` | diversified market-neutral cointegration stat-arb (IS-select / OOS-trade) |
+| `research_vrp.py` / `research_iron_condor.py` | volatility risk premium (HAC errors, tail-aware) |
 
-### v2.0 - Intelligence
-+VIL + AI + Strike Selection
+All use fixed a-priori params, held-out splits, cost sweeps, and verdicts that
+can say "no edge". **Discipline:** never tune params to make a backtest pass.
 
-### v3.0 - Context
-+Market Bias + Time Filter + Trade Ranker
+## Tests
 
-### v4.0 - Refinement
-+Liquidity Spike + Loss Cluster + Execution
+`tests/` — pytest covering risk engine, the honest monitor, the gap-honest exit
+engine, indicators, and config invariants. Run: `python -m pytest tests/ -q`.
 
----
+## Key files
 
-## NEXT PHASE B (Optional)
-
-- Options Greeks (Delta, Theta, IV)
-- Real ML model (GradientBoosting)
-- Multi-timeframe alignment
-- News event filtering
+| File | Purpose |
+|---|---|
+| `config.py` | thresholds, `PAPER_TRADE`, safety flags (`LEARNING_ENABLED`, `GATES_FAIL_CLOSED`, `REQUIRE_EARNINGS_DATA`, `ISWING_DECISION_TIME`) |
+| `scan_only_v2.py` | live scanner → `logs/signals.json` |
+| `core/strategy_india_swing.py` | the 11-gate swing strategy |
+| `core/risk_engine.py` | sizing, stops, daily kill-switch, correlation cap |
+| `core/metrics_writer.py` | honest daily metrics + drift alarms |
+| `core/api_dhan.py` | Dhan data (daily/intraday, dedup'd) |
+| `core/scrip_master.py` | live security IDs + lot sizes |

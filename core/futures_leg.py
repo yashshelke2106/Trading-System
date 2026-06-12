@@ -38,8 +38,18 @@ _OPTION_KEYS = (
 
 
 def lot_size_for(symbol: str) -> int:
-    """NSE F&O lot size. Falls back to 1 (unknown) so quantity math never breaks."""
-    return int(getattr(config, "NSE_LOT_SIZES", {}).get(symbol.upper(), 1))
+    """NSE F&O lot size — LIVE scrip master first (config.NSE_LOT_SIZES goes
+    stale when NSE revises lots), then the static map, then 1 so quantity math
+    never breaks."""
+    sym = symbol.upper()
+    try:
+        from core.scrip_master import lot_size as _live_lot
+        live = _live_lot(sym)
+        if live and live > 0:
+            return int(live)
+    except Exception:
+        pass
+    return int(getattr(config, "NSE_LOT_SIZES", {}).get(sym, 1))
 
 
 def attach_futures_leg(s: Dict) -> Optional[Dict]:

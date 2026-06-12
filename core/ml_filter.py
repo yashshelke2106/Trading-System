@@ -36,7 +36,7 @@ log = logging.getLogger(__name__)
 
 MODEL_PATH = Path("logs/ml_filter_model.pkl")
 ML_THRESHOLD = float(os.environ.get("ML_THRESHOLD", "0.55"))  # P(win) ≥ this
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2   # bumped: dropped vol_ratio (train/serve skew); real temporal split
 MIN_TRAINING_SAMPLES = 50   # under this, model unreliable; pass through
 
 # Feature schema — MUST match between training and inference
@@ -44,7 +44,8 @@ NUMERIC_FEATURES = [
     "rsi",            # 0..100
     "rs_vs_nifty",    # ratio, ~0.5..2.0
     "score",          # confluence 0..100
-    "vol_ratio",      # entry candle vol multiplier
+    # NOTE: vol_ratio removed — the training CSV lacked it (defaulted to a
+    # constant 1.0) while live passes real values, creating a train/serve skew.
 ]
 ORDINAL_FEATURES = {
     "grade": {"S": 3, "A": 2, "B": 1, "C": 0},
@@ -124,8 +125,6 @@ def _load_training_rows(csv_path: str = "backtest_india_swing_trades.csv"
                     r["rsi"] = float(r.get("rsi", 0) or 0)
                     r["rs_vs_nifty"] = float(r.get("rs_vs_nifty", 1) or 1)
                     r["score"] = float(r.get("score", 0) or 0)
-                    # vol_ratio missing in CSV — derive from grade as proxy or default 1.0
-                    r["vol_ratio"] = float(r.get("vol_ratio", 1.0) or 1.0)
                     r["near_52wh"] = (r.get("near_52wh", "False") == "True")
                     r["near_52wl"] = (r.get("near_52wl", "False") == "True")
                     # Target label: TARGET = 1, SL/BE_STOP = 0 (BE_STOP is "saved loss")
@@ -155,6 +154,8 @@ def train_and_save(csv_path: str = "backtest_india_swing_trades.csv",
     if len(rows) < MIN_TRAINING_SAMPLES:
         return {"trained": False, "reason": f"too_few_samples_{len(rows)}",
                 "min_required": MIN_TRAINING_SAMPLES}
+    # Real temporal order so the 70/30 split is time-based (not file/symbol order).
+    rows.sort(key=lambda r: str(r.get("entry_date", "")))
 
     # Build feature matrix
     X_list: List[np.ndarray] = []

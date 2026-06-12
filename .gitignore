@@ -38,5 +38,8 @@ Thumbs.db
 *.lock
 .claude/scheduled_tasks.lock
 *.bak
+.ipynb_checkpoints/
+# disabled embedded repo (trading-ui had its own .git from create-next-app)
+trading-ui/.git.disabled/
 # generated backtest output (harness recreates on run)
 backtest_live_pipeline_trades.csv

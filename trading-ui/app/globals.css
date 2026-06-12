@@ -1,0 +1,300 @@
+@import "tailwindcss";
+
+/* ============================================================
+   F&O Signal Terminal — design system
+   Premium dense trading-terminal aesthetic. Every legacy class
+   name is preserved (components untouched) but re-skinned.
+   ============================================================ */
+
+:root {
+  /* ── Surfaces (layered elevation) ── */
+  --bg:   #05080f;          /* app background          */
+  --c0:   #070b14;          /* deepest panel           */
+  --c1:   #0b1120;          /* card                    */
+  --c2:   #0f1729;          /* raised / nested         */
+  --c3:   #15203a;          /* hover / active fill     */
+  --glass: rgba(11,17,32,.72);
+
+  /* ── Borders ── */
+  --bd:   #1c2a44;          /* default border          */
+  --bdh:  #2c416a;          /* hover border            */
+  --bda:  #3f7bd0;          /* accent border           */
+
+  /* ── Text ── */
+  --tx:   #e6eefb;          /* primary                 */
+  --txm:  #9fb3cd;          /* secondary               */
+  --txd:  #6c819f;          /* muted / labels          */
+  --txs:  #475a76;          /* faint                   */
+
+  /* ── Accents ── */
+  --g:    #1fdd9a;          /* long / positive         */
+  --gd:   #0f9d72;
+  --r:    #ff4d67;          /* short / negative        */
+  --rd:   #c4314a;
+  --y:    #f7b733;          /* warn / grade B          */
+  --o:    #ff9d3c;          /* grade C                 */
+  --b:    #46b4ff;          /* info / nav active       */
+  --p:    #a78bfa;          /* accent purple           */
+
+  /* ── Tokens ── */
+  --r-sm: 6px;  --r-md: 9px;  --r-lg: 13px;  --r-xl: 18px;
+  --sp:   4px;
+  --sh-1: 0 1px 2px rgba(0,0,0,.4);
+  --sh-2: 0 6px 24px -8px rgba(0,0,0,.6);
+  --sh-3: 0 18px 50px -16px rgba(0,0,0,.75);
+  --ease: cubic-bezier(.22,.61,.36,1);
+
+  --background: #05080f;
+  --foreground: #e6eefb;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-mono: ui-monospace, "JetBrains Mono", "Cascadia Code", "SF Mono", "Menlo", monospace;
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html, body { height: 100%; }
+
+body {
+  background:
+    radial-gradient(1200px 600px at 78% -8%, rgba(70,180,255,.06), transparent 60%),
+    radial-gradient(1000px 520px at 8% 4%, rgba(31,221,154,.05), transparent 55%),
+    var(--bg);
+  background-attachment: fixed;
+  color: var(--tx);
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Inter, sans-serif;
+  font-size: 13px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+::selection { background: rgba(70,180,255,.28); color: #fff; }
+
+a { color: inherit; text-decoration: none; }
+
+:focus-visible {
+  outline: 2px solid var(--b);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* numerics: tabular everywhere it matters */
+.sVal, .statVal, .ixVal, .ixChg, .num, table td, table th { font-variant-numeric: tabular-nums; }
+
+/* ── Scrollbar ── */
+::-webkit-scrollbar { width: 7px; height: 7px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--bd); border-radius: 99px; border: 2px solid transparent; background-clip: content-box; }
+::-webkit-scrollbar-thumb:hover { background: var(--bdh); background-clip: content-box; }
+
+/* ── Animations ── */
+@keyframes pulse-g  { 0%,100%{box-shadow:0 0 0 0 rgba(31,221,154,.5)} 50%{box-shadow:0 0 0 6px rgba(31,221,154,0)} }
+@keyframes blink    { 0%,100%{opacity:1} 50%{opacity:.32} }
+@keyframes pulse-dot{ 0%,100%{opacity:1} 50%{opacity:.35} }
+@keyframes rise     { from{opacity:0; transform:translateY(6px)} to{opacity:1; transform:none} }
+
+/* ============================================================
+   APP SHELL
+   ============================================================ */
+.appShell {
+  position: sticky; top: 0; z-index: 50;
+  background: var(--glass);
+  backdrop-filter: saturate(140%) blur(14px);
+  -webkit-backdrop-filter: saturate(140%) blur(14px);
+  border-bottom: 1px solid var(--bd);
+}
+.appBar {
+  max-width: 1680px; margin: 0 auto;
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 18px; padding: 11px 28px 0;
+}
+.brand { display: flex; align-items: baseline; gap: 10px; }
+.brandMark {
+  width: 9px; height: 18px; border-radius: 3px;
+  background: linear-gradient(180deg, var(--g), var(--gd));
+  box-shadow: 0 0 14px rgba(31,221,154,.55);
+  transform: translateY(2px);
+}
+.appName {
+  font-size: 13px; font-weight: 800; letter-spacing: .16em;
+  text-transform: uppercase; color: var(--tx);
+}
+.appTag {
+  font-size: 9.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .12em;
+  color: var(--b); border: 1px solid color-mix(in srgb, var(--b) 45%, transparent);
+  background: color-mix(in srgb, var(--b) 12%, transparent);
+  padding: 3px 8px; border-radius: 999px; margin-left: 4px;
+}
+
+.container { max-width: 1680px; margin: 0 auto; padding: 18px 28px 40px; }
+.viewEnter { animation: rise .28s var(--ease) both; }
+
+/* ── Nav ── */
+.navWrap {
+  max-width: 1680px; margin: 0 auto;
+  display: flex; gap: 2px; padding: 4px 22px 0; overflow-x: auto;
+}
+.navTab {
+  position: relative;
+  font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .07em;
+  padding: 11px 15px 13px; color: var(--txd); white-space: nowrap;
+  transition: color .16s var(--ease);
+}
+.navTab::after {
+  content: ""; position: absolute; left: 12px; right: 12px; bottom: 0; height: 2px;
+  border-radius: 2px 2px 0 0; background: var(--b);
+  transform: scaleX(0); transform-origin: center;
+  transition: transform .2s var(--ease); opacity: 0;
+}
+.navTab:hover { color: var(--tx); }
+.navTab.active { color: var(--b); }
+.navTab.active::after { transform: scaleX(1); opacity: 1; }
+
+/* ============================================================
+   PRIMITIVES
+   ============================================================ */
+.card {
+  background: linear-gradient(180deg, var(--c1), var(--c0));
+  border: 1px solid var(--bd); border-radius: var(--r-lg);
+  box-shadow: var(--sh-1);
+}
+.btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 11px; font-weight: 700; letter-spacing: .04em;
+  padding: 7px 13px; border-radius: var(--r-sm);
+  border: 1px solid var(--bd); background: var(--c2); color: var(--tx);
+  cursor: pointer; transition: border-color .15s, background .15s, transform .05s;
+}
+.btn:hover { border-color: var(--bdh); background: var(--c3); }
+.btn:active { transform: translateY(1px); }
+.btn-accent { border-color: var(--bda); color: var(--b); background: color-mix(in srgb, var(--b) 12%, transparent); }
+
+.pill {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: 10px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase;
+  padding: 2px 8px; border-radius: 999px;
+  border: 1px solid var(--bd); background: var(--c2); color: var(--txm);
+}
+.tag-long  { color: var(--g); border-color: color-mix(in srgb, var(--g) 40%, transparent); background: color-mix(in srgb, var(--g) 12%, transparent); }
+.tag-short { color: var(--r); border-color: color-mix(in srgb, var(--r) 40%, transparent); background: color-mix(in srgb, var(--r) 12%, transparent); }
+
+.pos { color: var(--g); } .neg { color: var(--r); }
+
+/* ── Badges (legacy names) ── */
+.bLive, .bModel, .bStale {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 9.5px; font-weight: 800; letter-spacing: .09em;
+  padding: 2px 7px; border-radius: 999px; text-transform: uppercase; vertical-align: middle;
+}
+.bLive  { background: color-mix(in srgb, var(--g) 12%, transparent); color: var(--g); border: 1px solid color-mix(in srgb, var(--g) 34%, transparent); }
+.bLive::before { content:""; width:5px; height:5px; border-radius:50%; background: var(--g); box-shadow:0 0 7px var(--g); animation: pulse-dot 2s infinite; }
+.bModel { background: color-mix(in srgb, var(--y) 12%, transparent); color: var(--y); border: 1px solid color-mix(in srgb, var(--y) 30%, transparent); }
+.bStale { background: color-mix(in srgb, var(--r) 12%, transparent); color: var(--r); border: 1px solid color-mix(in srgb, var(--r) 30%, transparent); animation: blink 1.5s infinite; }
+
+/* ============================================================
+   SIGNAL CARD (legacy names, re-skinned)
+   ============================================================ */
+.sCard {
+  position: relative; border: 1px solid var(--bd); border-radius: var(--r-lg);
+  background: linear-gradient(180deg, var(--c1), var(--c0));
+  margin-bottom: 14px; overflow: hidden;
+  box-shadow: var(--sh-1);
+  transition: border-color .2s var(--ease), box-shadow .2s var(--ease), transform .2s var(--ease);
+}
+.sCard::before {
+  content:""; position:absolute; inset:0 0 auto 0; height:1px;
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--b) 55%, transparent), transparent);
+  opacity:.5;
+}
+.sCard:hover { border-color: var(--bdh); box-shadow: var(--sh-3); transform: translateY(-2px); }
+
+.sHdr { display:flex; align-items:center; justify-content:space-between; padding: 12px 16px 10px; border-bottom: 1px solid var(--bd); }
+.sSym { font-size: 16px; font-weight: 800; letter-spacing: .01em; }
+.sGrade { font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: .09em; padding: 3px 10px; border-radius: 999px; }
+
+.sPrices { display:grid; grid-template-columns: repeat(4,1fr); padding: 12px 16px; border-bottom: 1px solid var(--bd); }
+.sPCol { padding: 0 14px 0 0; }
+.sPCol + .sPCol { padding-left: 14px; border-left: 1px solid var(--bd); }
+.sLbl { font-size: 9.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .11em; color: var(--txd); margin-bottom: 4px; }
+.sVal { font-size: 14px; font-weight: 700; font-family: var(--font-mono); }
+.sMeta { padding: 9px 16px; font-size: 11px; color: var(--txm); border-bottom: 1px solid var(--bd); }
+.sReason { padding: 9px 16px 11px; font-size: 11px; color: var(--txd); line-height: 1.55; }
+.sOpt { padding: 11px 16px; background: var(--c2); border-top: 1px solid var(--bd); }
+.sOptHdr { display:flex; align-items:center; gap:7px; margin-bottom: 10px; font-size: 11.5px; font-weight: 700; flex-wrap: wrap; }
+.sOptGrid { display:grid; grid-template-columns: repeat(4,1fr); gap: 10px; }
+.sOptCell { text-align:center; }
+
+/* ============================================================
+   STAT BAR
+   ============================================================ */
+.statBar {
+  display:flex; align-items:stretch; flex-wrap:wrap;
+  background: linear-gradient(180deg, var(--c1), var(--c0));
+  border:1px solid var(--bd); border-radius: var(--r-lg); overflow:hidden;
+  box-shadow: var(--sh-1);
+}
+.statItem { flex:1; min-width: 104px; padding: 11px 16px; border-right:1px solid var(--bd); transition: background .15s; }
+.statItem:last-child { border-right:none; }
+.statItem:hover { background: var(--c2); }
+.statLbl { font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: .12em; color: var(--txd); margin-bottom: 5px; }
+.statVal { font-size: 14px; font-weight: 800; color: var(--tx); font-family: var(--font-mono); }
+
+/* ── Section header ── */
+.secHdr { display:flex; align-items:center; gap:9px; margin: 4px 0 14px; padding-bottom: 9px; border-bottom: 1px solid var(--bd); }
+.secDot { width:3px; height:15px; border-radius:2px; flex-shrink:0; background: var(--b); }
+.secTitle { font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: .13em; color: var(--txm); }
+
+/* legacy app title (kept for any page still using it) */
+.appTitle { display:flex; align-items:center; justify-content:space-between; padding: 10px 0 12px; border-bottom: 1px solid var(--bd); margin-bottom: 14px; }
+
+/* ── Index ticker bar ── */
+.ixBar {
+  display:flex; align-items:center;
+  background: linear-gradient(180deg, var(--c2), var(--c1));
+  border:1px solid var(--bd); border-radius: var(--r-md); overflow:hidden;
+  box-shadow: var(--sh-1);
+}
+.ixItem { flex:1; min-width: 138px; padding: 9px 18px; border-right:1px solid var(--bd); }
+.ixItem:last-child { border-right:none; }
+.ixLbl { font-size: 9px; font-weight: 800; text-transform: uppercase; letter-spacing: .13em; color: var(--txd); margin-bottom: 4px; }
+.ixVal { font-size: 15px; font-weight: 800; font-family: var(--font-mono); }
+.ixChg { font-size: 11px; font-weight: 700; font-family: var(--font-mono); margin-left: 8px; }
+.ixTs  { font-size: 9.5px; color: var(--txs); margin-left: auto; padding: 9px 16px; }
+
+/* ── Tabs (grade tabs on home — class hooks if adopted) ── */
+.tabRow { display:flex; gap:2px; border-bottom: 1px solid var(--bd); }
+.tabBtn {
+  padding: 9px 18px; border:none; background:transparent; cursor:pointer;
+  font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: .07em;
+  color: var(--txd); border-bottom: 2px solid transparent; transition: color .15s;
+}
+.tabBtn:hover { color: var(--tx); }
+.tabBtn.on { color: var(--b); border-bottom-color: var(--b); }
+
+/* ── Table ── */
+table.t { width:100%; border-collapse: collapse; font-size: 12px; }
+table.t th {
+  text-align:left; font-size: 9.5px; font-weight:800; text-transform:uppercase;
+  letter-spacing:.1em; color: var(--txd); padding: 9px 12px; border-bottom: 1px solid var(--bd);
+  position: sticky; top: 0; background: var(--c1);
+}
+table.t td { padding: 9px 12px; border-bottom: 1px solid color-mix(in srgb, var(--bd) 60%, transparent); }
+table.t tbody tr { transition: background .12s; }
+table.t tbody tr:hover { background: var(--c2); }
+
+/* ── Empty state ── */
+.empty {
+  display:flex; flex-direction:column; align-items:center; justify-content:center;
+  min-height: 220px; gap: 10px; border-radius: var(--r-lg);
+  border: 1px dashed var(--bd); color: var(--txd);
+  background: linear-gradient(180deg, var(--c1), transparent);
+}
+
+@media (max-width: 720px) {
+  .appBar, .navWrap, .container { padding-left: 14px; padding-right: 14px; }
+  .sPrices, .sOptGrid { grid-template-columns: repeat(2,1fr); }
+}
