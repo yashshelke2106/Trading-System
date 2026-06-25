@@ -27,6 +27,10 @@ class Position:
     entry_vol_avg: float = 0.0
     entry_time: datetime = field(default_factory=datetime.now)
     partial_booked: bool = False   # True after 50% booked at T1
+    # GAP #3: expiry concentration cap. Carry the option expiry date (YYYY-MM-DD
+    # string) so the risk engine can count how many open positions share the same
+    # weekly/monthly expiry. Empty string = unknown/non-option (never blocked).
+    option_expiry: str = ""
 
 
 @dataclass
@@ -59,6 +63,11 @@ class RiskEngine:
         # When a symbol hits SL, no further trades in that symbol until next session.
         # Prevents revenge entries / chasing the same setup that just failed.
         self.symbol_stops_today: set = set()
+        # GAP #4: intraday peak-to-trough drawdown halt.
+        # _session_peak tracks the highest (realized + unrealized) equity seen
+        # today. When the drop from that peak exceeds max_drawdown_halt * capital,
+        # can_trade() returns False for the rest of the session.
+        self._session_peak_equity: float = 0.0
 
     def check_market_hours(self, force_allowed: bool = False) -> bool:
         if force_allowed:
@@ -95,6 +104,32 @@ class RiskEngine:
         daily_loss_pct = loss / self.capital if self.capital > 0 else 0
         return daily_loss_pct < self.config['max_daily_loss']
 
+    def _update_session_peak(self, mark_prices: Optional[Dict[str, float]] = None) -> None:
+        """Advance the intraday equity high-water mark. Call before any halt check."""
+        current_equity = self.daily_pnl + self.unrealized_pnl(mark_prices)
+        if current_equity > self._session_peak_equity:
+            self._session_peak_equity = current_equity
+
+    def check_drawdown_halt(self, mark_prices: Optional[Dict[str, float]] = None) -> bool:
+        """GAP #4: peak-to-trough intraday drawdown guard.
+
+        Returns True (trading allowed) when the drop from today's equity high-water
+        mark is within the configured threshold. Returns False (halt) when it
+        exceeds max_drawdown_halt * capital.
+
+        Includes unrealized MTM when marks are supplied (same rule as
+        check_daily_loss). Falls back to realized-only when marks are absent.
+        Disabled (always True) when max_drawdown_halt is 0 or missing.
+        """
+        halt_ratio = self.config.get('max_drawdown_halt', 0.08)
+        if halt_ratio <= 0 or self.capital <= 0:
+            return True  # guard disabled
+        current_equity = self.daily_pnl + self.unrealized_pnl(mark_prices)
+        self._update_session_peak(mark_prices)
+        drawdown = self._session_peak_equity - current_equity
+        drawdown_pct = drawdown / self.capital
+        return drawdown_pct < halt_ratio
+
     def check_correlation(self, symbol: str,
                           sector_map: Optional[Dict[str, str]] = None) -> bool:
         """FIX (audit #17): cap simultaneous correlated exposure. True if opening
@@ -128,6 +163,32 @@ class RiskEngine:
         the rest of the session."""
         self.symbol_stops_today.add(symbol.upper())
 
+    def check_concurrent_positions(self) -> bool:
+        """GAP #3: global ceiling on simultaneous open positions.
+        Prevents the sector cap (max_per_sector) from being silently bypassed
+        across many sectors — e.g. 2 BANK + 2 IT + 2 METAL + ... = 16 concurrent.
+        Returns True (entry allowed) when opening one more would NOT exceed the cap.
+        Disabled (always True) when max_concurrent_positions is 0 or missing."""
+        cap = int(self.config.get('max_concurrent_positions', 5))
+        if cap <= 0:
+            return True
+        return len(self.positions) < cap
+
+    def check_expiry_concentration(self, expiry: str) -> bool:
+        """GAP #3: cap N open positions that all expire on the same date.
+        Options sharing one expiry are jointly exposed to a single gap/pin event;
+        this limits that correlated tail risk. Returns True (entry allowed) when
+        opening one more position for `expiry` would NOT exceed the cap.
+        Disabled (always True) when max_per_expiry is 0 or missing, or when
+        `expiry` is empty/unknown (non-option or expiry not available)."""
+        if not expiry:
+            return True  # unknown expiry → don't block; degrade gracefully
+        cap = int(self.config.get('max_per_expiry', 3))
+        if cap <= 0:
+            return True
+        count = sum(1 for p in self.positions if p.option_expiry == expiry)
+        return count < cap
+
     def _auto_reset_if_new_day(self) -> None:
         today = _now_ist().date()
         if self.last_reset != today:
@@ -136,11 +197,18 @@ class RiskEngine:
             self.last_reset = today
 
     def can_trade(self, symbol: str = "", force_allowed: bool = False,
-                  mark_prices: Optional[Dict[str, float]] = None) -> bool:
+                  mark_prices: Optional[Dict[str, float]] = None,
+                  expiry: str = "") -> bool:
         self._auto_reset_if_new_day()
         if not self.check_market_hours(force_allowed):
             return False
         if not self.check_daily_loss(mark_prices):   # audit #18: includes open MTM
+            return False
+        # GAP #4: peak-to-trough intraday drawdown halt. Checked after daily-loss
+        # so a severe single-trade blow-up is caught by daily-loss first; this gate
+        # catches a slower bleed across multiple trades. force_allowed does NOT
+        # bypass this — it is a capital-safety rule, not a market-hours override.
+        if not self.check_drawdown_halt(mark_prices):
             return False
         if not self.check_consecutive_losses():
             return False
@@ -151,6 +219,12 @@ class RiskEngine:
             return False
         # audit #17: correlation/concentration cap (only enforced when symbol given)
         if symbol and not self.check_correlation(symbol):
+            return False
+        # GAP #3: global concurrent-positions ceiling (symbol-independent)
+        if not self.check_concurrent_positions():
+            return False
+        # GAP #3: per-expiry concentration cap (only enforced when expiry given)
+        if expiry and not self.check_expiry_concentration(expiry):
             return False
         return True
 
@@ -201,21 +275,39 @@ class RiskEngine:
         else:
             return entry - reward
 
-    def validate_trade(self, position: Position, current_price: float, force_allowed: bool = False) -> Dict:
+    def validate_trade(self, position: Position, current_price: float,
+                       force_allowed: bool = False,
+                       mark_prices: Optional[Dict[str, float]] = None) -> Dict:
+        # GAP #2: accept mark_prices so the daily-loss and drawdown checks see
+        # open-position MTM, not just realized P&L. Callers that don't supply
+        # marks get the realized-only (legacy) behaviour — no crash, no change.
         reasons = []
-        
+
         if not self.check_market_hours(force_allowed):
             reasons.append("Outside market hours")
-        
-        if not self.check_daily_loss():
+
+        if not self.check_daily_loss(mark_prices):
             reasons.append("Daily loss limit reached")
-        
+
+        if not self.check_drawdown_halt(mark_prices):
+            reasons.append("Intraday drawdown halt triggered")
+
         if not self.check_consecutive_losses():
             reasons.append("Max consecutive losses reached")
-        
+
         if not self.check_trades_limit():
             reasons.append("Daily trades limit reached")
-        
+
+        # GAP #3: global concurrent-positions ceiling
+        if not self.check_concurrent_positions():
+            reasons.append("Max concurrent positions reached")
+
+        # GAP #3: per-expiry concentration cap (uses expiry from the candidate position)
+        if not self.check_expiry_concentration(position.option_expiry):
+            reasons.append(
+                f"Max positions for expiry {position.option_expiry} reached"
+            )
+
         if position.quantity <= 0:
             reasons.append("Invalid quantity")
 
@@ -226,16 +318,18 @@ class RiskEngine:
             return {'is_valid': False, 'reasons': reasons, 'can_trade': False}
 
         rr = abs(position.target_price - position.entry_price) / sl_dist
-        
+
         if rr < self.config['min_risk_reward']:
             reasons.append(f"R:R below {self.config['min_risk_reward']}")
-        
+
         is_valid = len(reasons) == 0
-        
+
         return {
             'is_valid': is_valid,
             'reasons': reasons,
-            'can_trade': self.can_trade(force_allowed=force_allowed)
+            'can_trade': self.can_trade(force_allowed=force_allowed,
+                                        mark_prices=mark_prices,
+                                        expiry=position.option_expiry)
         }
 
     def open_position(self, position: Position, force_allowed: bool = False) -> bool:
@@ -333,6 +427,7 @@ class RiskEngine:
     def reset_daily(self):
         self.daily_pnl = 0
         self.trades_today = 0
+        self._session_peak_equity = 0.0   # GAP #4: reset peak on new session
 
     def check_sl_hit(self, position: Position, current_price: float) -> bool:
         if position.direction == "long":

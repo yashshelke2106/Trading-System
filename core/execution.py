@@ -278,7 +278,16 @@ class ExecutionEngine:
     def execute_trade(self, symbol: str, direction: str, capital: float,
                    entry_price: float, atr: float, strike: Optional[StrikeRecommendation] = None,
                    use_options: bool = False, use_futures: bool = None,
-                   entry_volume: float = 0.0, entry_vol_avg: float = 0.0) -> Optional[OrderResult]:
+                   entry_volume: float = 0.0, entry_vol_avg: float = 0.0,
+                   mark_prices: Optional[Dict[str, float]] = None,
+                   option_expiry: str = "") -> Optional[OrderResult]:
+        # GAP #3: option_expiry (YYYY-MM-DD) is carried from the signal dict by
+        # the caller (live_runner / aladdin_runner) so the risk engine can enforce
+        # the per-expiry concentration cap. Defaults to "" (non-option / unknown)
+        # which the expiry cap degrades gracefully to pass-through.
+        # GAP #2: mark_prices should be the live last-price of each open position.
+        # The caller (live_runner._run_pipeline) is responsible for supplying these.
+        # If not supplied, validate_trade falls back to realized-only (legacy safe).
         if use_options and strike is None:
             return None
         # Default instrument from config when caller doesn't specify. Futures is
@@ -334,9 +343,11 @@ class ExecutionEngine:
             entry_atr=atr,
             entry_volume=entry_volume,
             entry_vol_avg=entry_vol_avg,
+            option_expiry=option_expiry,   # GAP #3: for expiry concentration cap
         )
 
-        validation = self.risk.validate_trade(position, entry_price, force_allowed=True)
+        validation = self.risk.validate_trade(position, entry_price, force_allowed=True,
+                                              mark_prices=mark_prices)
 
         if not validation['is_valid']:
             return None

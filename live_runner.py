@@ -622,7 +622,26 @@ class IntegratedPipeline:
     # ─────────────────────────────────────────────────────────────────────
 
     def _run_pipeline(self, candidates: List[str]) -> List[Dict]:
-        open_syms = {p.symbol for p in self.execution.get_open_positions()}
+        # GAP #4: check can_trade() once at the top of the pipeline cycle.
+        # If the kill gate fires (daily-loss, drawdown-halt, consecutive-loss
+        # limit, trades-per-day), skip the entire candidate batch — no point
+        # running expensive signal generation if we cannot open anything.
+        # We build live mark prices here (last close of each open position) so
+        # the MTM-aware daily-loss and drawdown checks (GAP #2) are fed real data.
+        open_positions = self.execution.get_open_positions()
+        live_marks: Dict[str, float] = {}
+        for pos in open_positions:
+            df = self.scanner.get_market_data(pos.symbol, 5)
+            if df is not None and not df.empty:
+                live_marks[pos.symbol] = float(df['close'].iloc[-1])
+
+        risk_engine = self.execution.risk
+        if not risk_engine.can_trade(mark_prices=live_marks or None):
+            log.info("  [KILL GATE] can_trade() blocked — daily-loss/drawdown/limits hit; "
+                     "skipping new entries this tick")
+            return []
+
+        open_syms = {p.symbol for p in open_positions}
         executed: List[Dict] = []
         signal_items: List[Dict] = []
 
@@ -715,6 +734,7 @@ class IntegratedPipeline:
                 use_options  = False,
                 entry_volume = entry_vol,
                 entry_vol_avg= entry_va,
+                mark_prices  = live_marks or None,  # GAP #2: feed open-MTM into entry gate
             )
 
             if result and result.success:
