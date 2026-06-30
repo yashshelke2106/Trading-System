@@ -1,0 +1,113 @@
+"""
+core/allocation.py — path-#1 allocation engine.
+
+After an exhaustive edge hunt found no robust tradeable alpha in this universe
+(see docs/research/*.md), the evidence-backed strategy is to capture the equity
+RISK PREMIUM cheaply, with disciplined drawdown control — not to manufacture an
+edge. This module defines that allocation, computes the current target, and
+backtests it honestly net of cost.
+
+Core: a low-cost broad-index ETF (NIFTYBEES / Nifty 50), proxied here by the
+NIFTY index in logs/bar_cache. Optional 200-DMA trend overlay de-risks below the
+moving average (cuts drawdown ~half, lowers return — a risk-tolerance choice, not
+a free lunch; measured, not assumed). Factor tilts are deliberately NOT defaulted
+on: the backtested factor outperformance is survivorship-inflated (today's
+constituents) and cross-sectional momentum was already rejected under proper
+testing. Use real factor-INDEX ETFs for that sleeve if desired.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Dict, Optional
+
+import numpy as np
+import pandas as pd
+
+ALLOCATION_CONFIG = {
+    "core_instrument": "NIFTYBEES",     # Nifty 50 index ETF (proxied by NIFTY index here)
+    "benchmark": "NIFTY",
+    "equity_weight": 1.0,               # target core equity exposure when risk-on
+    "trend_overlay": {
+        "enabled": False,               # opt-in drawdown control (default off = pure index core)
+        "ma_window": 200,
+        "risk_off_weight": 0.5,         # equity weight when NIFTY < MA (de-risk, not full cash)
+    },
+    "cash_yield_annual": 0.065,         # India ~risk-free on the de-risked portion
+    "cost_per_switch": 0.0010,          # 0.10% turnover cost on a trend state change
+    "etf_expense_annual": 0.0005,       # ~0.05% NIFTYBEES expense ratio
+}
+
+
+@dataclass
+class TargetAllocation:
+    asof: str
+    state: str                          # "risk_on" | "risk_off" | "core_only"
+    equity_weight: float
+    cash_weight: float
+    note: str = ""
+
+
+def _equity_weight_series(nifty: pd.Series, cfg: dict) -> pd.Series:
+    """Daily target equity weight (point-in-time: depends only on prior close)."""
+    ov = cfg["trend_overlay"]
+    full = cfg["equity_weight"]
+    if not ov["enabled"]:
+        return pd.Series(full, index=nifty.index)
+    ma = nifty.rolling(ov["ma_window"]).mean()
+    above = (nifty > ma)
+    w = pd.Series(np.where(above, full, ov["risk_off_weight"]), index=nifty.index)
+    # before the MA is defined, hold core (no signal yet)
+    w[ma.isna()] = full
+    return w
+
+
+def compute_target_allocation(nifty: pd.Series, asof: Optional[str] = None,
+                              cfg: dict = None) -> TargetAllocation:
+    """Today's (or asof's) target allocation from the latest available close."""
+    cfg = cfg or ALLOCATION_CONFIG
+    s = nifty.sort_index()
+    if asof is not None:
+        s = s[s.index <= pd.to_datetime(asof)]
+    if len(s) == 0:
+        raise ValueError("no price history on/before asof")
+    w = _equity_weight_series(s, cfg)
+    eq = float(w.iloc[-1])
+    ov = cfg["trend_overlay"]
+    if not ov["enabled"]:
+        state, note = "core_only", "pure index core (trend overlay off)"
+    else:
+        ma = s.rolling(ov["ma_window"]).mean().iloc[-1]
+        above = s.iloc[-1] > ma if not pd.isna(ma) else True
+        state = "risk_on" if above else "risk_off"
+        note = f"NIFTY {s.iloc[-1]:.0f} {'>' if above else '<'} {ov['ma_window']}DMA {ma:.0f}"
+    return TargetAllocation(asof=str(s.index[-1].date()), state=state,
+                            equity_weight=eq, cash_weight=round(1 - eq, 4), note=note)
+
+
+def backtest_allocation(nifty: pd.Series, cfg: dict = None) -> pd.Series:
+    """Daily net portfolio returns for the allocation (no lookahead; net of
+    switch cost + ETF expense + cash yield on the de-risked portion)."""
+    cfg = cfg or ALLOCATION_CONFIG
+    s = nifty.sort_index()
+    ret = s.pct_change().fillna(0.0)
+    w = _equity_weight_series(s, cfg).shift(1).fillna(cfg["equity_weight"])  # act on prior signal
+    cash_daily = cfg["cash_yield_annual"] / 252
+    expense_daily = cfg["etf_expense_annual"] / 252
+    switch_cost = w.diff().abs().fillna(0.0) * cfg["cost_per_switch"]
+    port = w * ret + (1 - w) * cash_daily - switch_cost - expense_daily * w
+    return port.rename("alloc_ret")
+
+
+def perf_summary(r: pd.Series, rf: float = 0.065) -> Dict[str, float]:
+    r = r.dropna()
+    yrs = (r.index[-1] - r.index[0]).days / 365.25
+    cagr = (1 + r).prod() ** (1 / yrs) - 1
+    vol = r.std() * np.sqrt(252)
+    eq = (1 + r).cumprod()
+    return {
+        "cagr": round(cagr, 4), "vol": round(vol, 4),
+        "sharpe": round((cagr - rf) / vol, 3) if vol else 0.0,
+        "max_dd": round((eq / eq.cummax() - 1).min(), 4),
+        "years": round(yrs, 1),
+    }
