@@ -104,6 +104,28 @@ def _apply_fill_costs(entry_prem: float, gross_exit_prem: float,
     net    = gross_exit_prem - spread - theta
     return max(net, entry_prem * COST_FLOOR_PCT)
 
+
+def _intrinsic(spot: float, strike: float, option_type: str) -> float:
+    """Intrinsic value of an option — the ONLY thing an expired contract is
+    worth. Used by the roll-guard below."""
+    if spot <= 0 or strike <= 0:
+        return 0.0
+    return max(0.0, spot - strike) if option_type == "CE" else max(0.0, strike - spot)
+
+
+def _contract_expired(sig: Dict, now: datetime) -> bool:
+    """True once the signal's OWN contract has passed its expiry date.
+    After that point the live chain shows the NEXT expiry at the same
+    strike — marking an exit against it manufactured phantom +200%
+    'EXPIRED wins' in the journal (audited 2026-07-04). Roll-guard."""
+    exp = str(sig.get("option_expiry") or "").strip()
+    if not exp:
+        return False
+    try:
+        return now.date() > datetime.fromisoformat(exp[:10]).date()
+    except (ValueError, TypeError):
+        return False
+
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _TRADES_CSV   = os.path.join(_PROJECT_ROOT, "logs", "trades.csv")
 
@@ -391,6 +413,32 @@ def check_outcomes(lot_sizes: Dict[str, int] = None) -> Tuple[int, int, int]:
             entry_spot    = float(sig.get("entry_price", 0))
             option_type   = sig.get("option_type", "CE")
             option_strike = float(sig.get("option_strike", 0) or 0)
+
+            # ── ROLL-GUARD: contract already expired → intrinsic, never chain ──
+            # The live chain now quotes the NEXT expiry at this strike. Marking
+            # against it produced impossible "EXPIRED avg +76%" journal rows
+            # (e.g. ICICIPRULI PE +268% while spot moved AGAINST the trade).
+            # A dead option is worth intrinsic at expiry — nothing else.
+            if _contract_expired(sig, now):
+                spot_now = float(prices.get(sym, 0) or 0) or entry_spot
+                exit_p = _intrinsic(spot_now, option_strike, option_type)
+                _srt, _tph = _real_costs(sig)
+                held_h = min(sig_age_h, MAX_SIGNAL_AGE_HOURS)
+                # costs still apply (spread was paid; theta bled to zero anyway)
+                exit_p = min(_apply_fill_costs(entry_prem_f, exit_p, held_h,
+                                               spread_rt=_srt, theta_per_h=_tph),
+                             exit_p if exit_p > 0 else entry_prem_f * COST_FLOOR_PCT)
+                resolve_signal(sig["signal_id"], "EXPIRED",
+                               float(sig.get("entry_price", 0)), lot_size=lot,
+                               exit_prem=exit_p,
+                               extra={"exit_reason": "contract_expired_intrinsic"})
+                _write_paper_trade(sig, "EXPIRED",
+                                   float(sig.get("entry_price", 0)), lot,
+                                   exit_prem=exit_p)
+                expired += 1
+                log.info(f"[Tracker] ROLL-GUARD {sym} {option_type} {option_strike} "
+                         f"expired -> intrinsic={exit_p:.2f} (entry={entry_prem_f:.2f})")
+                continue
 
             # Current premium: live Dhan chain first
             current_prem = _current_prem_from_chain(
