@@ -568,6 +568,39 @@ async def get_accuracy():
         return {"records": [], "pnl_summary": {}, "tracking": [], "error": str(e)}
 
 
+# ── Path-#1 allocation (equity-premium strategy) ──────────────────────────────
+
+@app.get("/api/allocation")
+async def get_allocation(refresh: bool = False):
+    """Path-#1 readout: today's target allocation + honest backtest + accuracy
+    by holding horizon. Serves logs/allocation_state.json when fresh (written by
+    allocation_task.py); recomputes when missing/stale or ?refresh=true."""
+    def _load():
+        from allocation_task import STATE_FILE, ALERT_FILE, build_status
+
+        status = None
+        if not refresh and os.path.exists(STATE_FILE):
+            age_h = (time.time() - os.path.getmtime(STATE_FILE)) / 3600
+            if age_h < 24:
+                with open(STATE_FILE, encoding="utf-8") as f:
+                    status = json.load(f)
+        if status is None:
+            status = build_status(refresh=refresh)
+
+        alert = None
+        if os.path.exists(ALERT_FILE):
+            with open(ALERT_FILE, encoding="utf-8") as f:
+                alert = f.read().strip()
+        status["alert"] = alert
+        return status
+
+    try:
+        return await _run(_load)
+    except Exception as e:
+        return {"targets": {}, "backtest": {}, "horizon_accuracy": {},
+                "alert": None, "error": str(e)}
+
+
 # ── Intelligence / RAG ────────────────────────────────────────────────────────
 
 @app.get("/api/intelligence")

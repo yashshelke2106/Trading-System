@@ -111,3 +111,59 @@ def perf_summary(r: pd.Series, rf: float = 0.065) -> Dict[str, float]:
         "max_dd": round((eq / eq.cummax() - 1).min(), 4),
         "years": round(yrs, 1),
     }
+
+
+HORIZONS = [("1 day", 1), ("1 week", 5), ("1 month", 21), ("3 months", 63),
+            ("6 months", 126), ("1 year", 252), ("2 years", 504), ("3 years", 756)]
+
+
+def horizon_accuracy(r: pd.Series) -> list:
+    """Probability of profit + avg/worst return by holding period (overlapping
+    windows — a 'what are my odds if I enter today' readout, not indep. samples)."""
+    eq = (1 + r.dropna()).cumprod()
+    rows = []
+    for label, days in HORIZONS:
+        w = eq.pct_change(days).dropna()
+        if len(w) < 30:
+            continue
+        rows.append({
+            "horizon": label, "days": days,
+            "accuracy": round(float((w > 0).mean()), 4),
+            "avg_return": round(float(w.mean()), 4),
+            "worst": round(float(w.min()), 4),
+            "windows": int(len(w)),
+        })
+    return rows
+
+
+def load_nifty(path: str = "logs/bar_cache/NIFTY.parquet") -> pd.Series:
+    return pd.read_parquet(path).sort_index()["close"]
+
+
+def refresh_nifty_cache(path: str = "logs/bar_cache/NIFTY.parquet") -> str:
+    """Append fresh NIFTY daily bars from yfinance (fallback feed). Returns the
+    last cached date. Never raises — on any fetch failure the stale cache stands."""
+    old = pd.read_parquet(path).sort_index()
+    try:
+        import yfinance as yf
+        start = (old.index.max() - pd.Timedelta(days=7)).strftime("%Y-%m-%d")
+        new = yf.download("^NSEI", start=start, progress=False, auto_adjust=False)
+        if new is None or len(new) == 0:
+            return str(old.index.max().date())
+        if isinstance(new.columns, pd.MultiIndex):
+            new.columns = [c[0].lower() for c in new.columns]
+        else:
+            new.columns = [str(c).lower() for c in new.columns]
+        new = new[["open", "high", "low", "close", "volume"]]
+        # cache convention stores bars at prior-day 18:30 (UTC-shifted IST dates)
+        off = old.index[-1] - old.index[-1].normalize()
+        if off > pd.Timedelta(hours=12):
+            new.index = new.index.normalize() + off - pd.Timedelta(days=1)
+        old_days = set((old.index + pd.Timedelta(hours=6)).normalize())
+        add = new[~(new.index + pd.Timedelta(hours=6)).normalize().isin(old_days)]
+        if len(add):
+            pd.concat([old, add]).sort_index().to_parquet(path)
+            return str(add.index.max().date())
+        return str(old.index.max().date())
+    except Exception:
+        return str(old.index.max().date())

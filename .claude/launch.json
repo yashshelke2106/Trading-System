@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "api",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["-m", "uvicorn", "api_server:app", "--port", "8000"],
+      "port": 8000
+    },
+    {
+      "name": "trading-ui",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--prefix", "trading-ui", "run", "dev"],
+      "port": 3000
+    }
+  ]
+}
