@@ -140,6 +140,38 @@ def load_nifty(path: str = "logs/bar_cache/NIFTY.parquet") -> pd.Series:
     return pd.read_parquet(path).sort_index()["close"]
 
 
+def top100_fno_composite(cache_dir: str = "logs/bar_cache") -> pd.Series:
+    """Equal-weight composite of the top-100 F&O stocks by average turnover.
+    SURVIVORS-ONLY: the cache holds today's F&O members, so this backtest
+    silently deletes every delisted blow-up. Measured inflation on the
+    survivorship-complete bhavcopy archive: ~+9.7pp CAGR (2019-20 window).
+    Comparison/monitoring ONLY — never a tradeable-performance claim."""
+    import glob
+    import os
+    px, turn = {}, {}
+    for f in glob.glob(os.path.join(cache_dir, "*.parquet")):
+        sym = os.path.splitext(os.path.basename(f))[0]
+        if sym.startswith("_") or sym in ("NIFTY", "BANKNIFTY", "FINNIFTY"):
+            continue
+        d = pd.read_parquet(f).sort_index()
+        if len(d) < 500 or "volume" not in d:
+            continue
+        px[sym] = d["close"]
+        turn[sym] = float((d["close"] * d["volume"]).mean())
+    top = sorted(turn, key=turn.get, reverse=True)[:100]
+    ret = pd.DataFrame({s: px[s] for s in top}).sort_index().pct_change(fill_method=None)
+    ew = ret.mean(axis=1).dropna()
+    return ((1 + ew).cumprod() * 100).rename("close")
+
+
+def equity_curve_points(series: pd.Series, freq: str = "ME") -> list:
+    """Growth-of-100 sampled at freq — compact payload for the dashboard chart."""
+    s = series.sort_index()
+    s = s / s.iloc[0] * 100
+    pts = s.resample(freq).last().dropna()
+    return [{"d": d.strftime("%Y-%m"), "v": round(float(v), 2)} for d, v in pts.items()]
+
+
 def refresh_nifty_cache(path: str = "logs/bar_cache/NIFTY.parquet") -> str:
     """Append fresh NIFTY daily bars from yfinance (fallback feed). Returns the
     last cached date. Never raises — on any fetch failure the stale cache stands."""

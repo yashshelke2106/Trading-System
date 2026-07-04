@@ -22,7 +22,8 @@ from datetime import datetime
 
 from core.allocation import (
     ALLOCATION_CONFIG, backtest_allocation, compute_target_allocation,
-    horizon_accuracy, load_nifty, perf_summary, refresh_nifty_cache,
+    equity_curve_points, horizon_accuracy, load_nifty, perf_summary,
+    refresh_nifty_cache, top100_fno_composite,
 )
 
 STATE_FILE = os.path.join("logs", "allocation_state.json")
@@ -55,6 +56,24 @@ def build_status(refresh: bool = True) -> dict:
         r = backtest_allocation(nifty, cfg=cfg)
         out["backtest"][name] = perf_summary(r)
         out["horizon_accuracy"][name] = horizon_accuracy(r)
+
+    # comparison: top-100 F&O equal-weight composite (survivors-only — labeled)
+    try:
+        basket = top100_fno_composite()
+        ix = basket.index.intersection(nifty.index)
+        b, n = basket[ix], nifty[ix]
+        out["comparison"] = {
+            "label": "Top-100 F&O equal-weight",
+            "caveat": ("survivors-only universe — measured ~+9.7pp/yr "
+                       "survivorship inflation; monitoring only, not tradeable"),
+            "backtest": perf_summary(b.pct_change().dropna()),
+            "curve": {
+                "basket": equity_curve_points(b),
+                "nifty": equity_curve_points(n),
+            },
+        }
+    except Exception as e:
+        out["comparison"] = {"error": str(e)}
 
     # distance to the flip line (overlay decision variable)
     ma = nifty.rolling(ALLOCATION_CONFIG["trend_overlay"]["ma_window"]).mean().iloc[-1]

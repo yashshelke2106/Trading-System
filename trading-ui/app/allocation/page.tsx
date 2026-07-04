@@ -22,6 +22,12 @@ const TD: React.CSSProperties = {
 interface Target { state: string; equity_weight: number; cash_weight: number; note: string }
 interface Perf { cagr: number; vol: number; sharpe: number; max_dd: number; years: number }
 interface HorizonRow { horizon: string; days: number; accuracy: number; avg_return: number; worst: number; windows: number }
+interface CurvePoint { d: string; v: number }
+interface Comparison {
+  label?: string; caveat?: string; backtest?: Perf
+  curve?: { basket: CurvePoint[]; nifty: CurvePoint[] }
+  error?: string
+}
 interface AllocationData {
   asof: string | null
   instrument: string
@@ -31,8 +37,36 @@ interface AllocationData {
   targets: Record<string, Target>
   backtest: Record<string, Perf>
   horizon_accuracy: Record<string, HorizonRow[]>
+  comparison?: Comparison
   alert?: string | null
   error?: string
+}
+
+function CurveChart({ curve }: { curve: { basket: CurvePoint[]; nifty: CurvePoint[] } }) {
+  const W = 640, H = 200, PAD = 36
+  const all = [...curve.basket.map(p => p.v), ...curve.nifty.map(p => p.v)]
+  const vMax = Math.max(...all), vMin = Math.min(...all)
+  const x = (i: number, n: number) => PAD + (i / Math.max(n - 1, 1)) * (W - PAD - 8)
+  const y = (v: number) => H - 24 - ((v - vMin) / (vMax - vMin || 1)) * (H - 40)
+  const path = (pts: CurvePoint[]) => pts.map((p, i) => `${i ? "L" : "M"}${x(i, pts.length).toFixed(1)},${y(p.v).toFixed(1)}`).join(" ")
+  const yearTicks = curve.nifty.map((p, i) => ({ p, i })).filter(({ p }) => p.d.endsWith("-12"))
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", height: "auto" }} role="img"
+      aria-label="Growth of 100: top-100 F&O basket vs NIFTY">
+      {[100, 200, 300, 400].filter(g => g >= vMin && g <= vMax).map(g => (
+        <g key={g}>
+          <line x1={PAD} x2={W - 8} y1={y(g)} y2={y(g)} stroke="var(--bd)" strokeWidth={1} />
+          <text x={4} y={y(g) + 4} fill="var(--txs)" fontSize={10} fontFamily="'JetBrains Mono',monospace">{g}</text>
+        </g>
+      ))}
+      {yearTicks.map(({ p, i }) => (
+        <text key={p.d} x={x(i, curve.nifty.length)} y={H - 8} fill="var(--txs)" fontSize={10}
+          textAnchor="middle" fontFamily="'JetBrains Mono',monospace">{String(Number(p.d.slice(0, 4)) + 1)}</text>
+      ))}
+      <path d={path(curve.nifty)} fill="none" stroke="var(--txd)" strokeWidth={1.5} strokeDasharray="5 4" />
+      <path d={path(curve.basket)} fill="none" stroke="#38b2f0" strokeWidth={2} />
+    </svg>
+  )
 }
 
 const VARIANTS = [
@@ -186,6 +220,34 @@ export default function AllocationPage() {
         Overlapping windows — reads as &quot;odds of profit entering on a random day,&quot; not independent samples.
         Accuracy here comes from premium accrual over time, not prediction. Judge decisions on the 6–12 month frame.
       </div>
+
+      {/* Comparison: top-100 F&O equal-weight (survivors-only) */}
+      {data?.comparison?.curve && (
+        <>
+          <div className="secHdr">
+            <div className="secDot" style={{ background: "#f59e0b" }} />
+            <div className="secTitle">{data.comparison.label ?? "Comparison"} vs NIFTY · Growth of ₹100</div>
+          </div>
+          <div style={{ border: "1px solid var(--bd)", borderRadius: 8, background: "var(--c1)", padding: "14px 10px 6px" }}>
+            <div style={{ display: "flex", gap: 16, fontSize: ".68em", color: "var(--txd)", padding: "0 8px 8px" }}>
+              <span><span style={{ display: "inline-block", width: 18, height: 3, background: "#38b2f0", verticalAlign: "middle", marginRight: 6 }} />{data.comparison.label}</span>
+              <span><span style={{ display: "inline-block", width: 18, height: 0, borderTop: "2px dashed var(--txd)", verticalAlign: "middle", marginRight: 6 }} />NIFTY 50</span>
+              {data.comparison.backtest && (
+                <span style={{ marginLeft: "auto", fontFamily: "'JetBrains Mono',monospace" }}>
+                  basket CAGR {fmt((data.comparison.backtest.cagr ?? 0) * 100, 1)}% · maxDD {fmt((data.comparison.backtest.max_dd ?? 0) * 100, 1)}%
+                </span>
+              )}
+            </div>
+            <CurveChart curve={data.comparison.curve} />
+          </div>
+          <div style={{
+            background: "rgba(245,158,11,.06)", border: "1px solid rgba(245,158,11,.4)",
+            borderRadius: 8, padding: "8px 12px", fontSize: ".72em", color: "#f59e0b",
+          }}>
+            ⚠ {data.comparison.caveat}
+          </div>
+        </>
+      )}
 
       {/* Controls */}
       <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
