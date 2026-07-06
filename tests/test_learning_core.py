@@ -270,6 +270,14 @@ def test_optimize_params_n0_noop_and_coarse_gated_on_thin():
     L = AdaptiveLearner()
     assert L._optimize_params([], [], {}, {}, force=True) == {}     # n=0 honest
     L._params.setdefault("PATTERN_WEIGHTS", {})
+    # Pin the RSI floors to their lower bound so the diff-based relax rules
+    # can't fire on the synthetic all-RSI-50 fixture. Without this the test
+    # depends on whatever logs/learned_params.json happens to hold (it passes
+    # on a dev box where the floor is already relaxed, but a fresh clone
+    # starts at the coded default and the rule fires). Deterministic now.
+    L._params.setdefault("SIGNAL_CONFIG", {})
+    L._params["SIGNAL_CONFIG"]["rsi_long_momentum_min"] = 55   # lo bound
+    L._params["SIGNAL_CONFIG"]["rsi_short_floor"] = 20         # lo bound
     ch = L._optimize_params(_decided(40), _decided(40), {}, {}, force=True)
     # thin sample (<MIN_TRADES_FOR_UPDATE): only the shrinkage-safe
     # per-pattern rule may fire; coarse structural knobs stay gated.
