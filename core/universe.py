@@ -35,7 +35,35 @@ FO_UNIVERSE = [
     "PIDILITIND",
 ]
 
-# Most-liquid 100 F&O names (FO_UNIVERSE is rank-ordered largest→smallest by
-# market-cap / turnover). Tighter universe = less noise, tighter spreads,
-# cleaner option chains. Scanner uses this by default.
-TOP100_FO = FO_UNIVERSE[:100]
+# Most-liquid 100 F&O names, RANK-ORDERED by MEASURED avg daily turnover
+# (close*volume, trailing ~252 sessions from logs/bar_cache; rebuilt 2026-07-07).
+# This is the swing-trade universe: high volume => tight spreads + reliable
+# delivery fills, which is what actually matters holding across days. The
+# #100 name still trades ~Rs150 Cr/day. Regenerate with scripts/rebuild_liquid_universe.py
+# whenever the cache is refreshed. Note: TATAMOTORS and LTIM are liquid F&O
+# names currently excluded only due to a bar_cache gap — re-add once cached.
+TOP100_LIQUID = [
+    "HDFCBANK", "RELIANCE", "ICICIBANK", "BHARTIARTL", "INFY",
+    "SBIN", "ETERNAL", "TCS", "M&M", "LT",
+    "AXISBANK", "INDIGO", "BAJFINANCE", "BEL", "ITC",
+    "MARUTI", "SHRIRAMFIN", "TATASTEEL", "MCX", "HINDALCO",
+    "ADANIPOWER", "HCLTECH", "SUNPHARMA", "PAYTM", "HINDUNILVR",
+    "JIOFIN", "TITAN", "NTPC", "COALINDIA", "VEDL",
+    "NATIONALUM", "ADANIENT", "ONGC", "POWERGRID", "KOTAKBANK",
+    "ADANIGREEN", "HEROMOTOCO", "ADANIPORTS", "EICHERMOT", "CANBK",
+    "INDUSINDBK", "BAJAJ-AUTO", "BHEL", "ULTRACEMCO", "TRENT",
+    "WIPRO", "TECHM", "ASIANPAINT", "MAXHEALTH", "PERSISTENT",
+    "APOLLOHOSP", "SAIL", "TVSMOTOR", "BPCL", "CHOLAFIN",
+    "PFC", "INDUSTOWER", "POLYCAB", "BANKBARODA", "RECLTD",
+    "FEDERALBNK", "BAJAJFINSV", "MUTHOOTFIN", "HINDPETRO", "DIVISLAB",
+    "DRREDDY", "CIPLA", "HDFCLIFE", "DLF", "IDFCFIRSTB",
+    "DMART", "PNB", "TATAPOWER", "LUPIN", "MOTHERSON",
+    "BRITANNIA", "GRASIM", "INDHOTEL", "SBILIFE", "LAURUSLABS",
+    "JSWSTEEL", "ABB", "NAUKRI", "GAIL", "NMDC",
+    "BHARATFORG", "UPL", "GODREJPROP", "GLENMARK", "NESTLEIND",
+    "GODREJCP", "AUROPHARMA", "IRFC", "TATACONSUM", "OFSS",
+    "JINDALSTEL", "BANDHANBNK", "NYKAA", "VOLTAS", "MCDOWELL-N",
+]
+
+# Back-compat alias; now points at the data-verified liquid ranking.
+TOP100_FO = TOP100_LIQUID
