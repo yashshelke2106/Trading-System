@@ -12,6 +12,12 @@
       "runtimeExecutable": "npm",
       "runtimeArgs": ["--prefix", "trading-ui", "run", "dev"],
       "port": 3000
+    },
+    {
+      "name": "swing-app",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["-m", "streamlit", "run", "swing_app.py", "--server.headless", "true", "--server.port", "8501"],
+      "port": 8501
     }
   ]
 }
