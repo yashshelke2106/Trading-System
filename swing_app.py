@@ -77,6 +77,59 @@ if blocked:
                      f"{blocked[0]['direction']} setups (watchlist)"):
         st.dataframe(_table(blocked), use_container_width=True)
 
+st.subheader("📒 Paper trades (journal → tracker → learner)")
+import json as _json
+import os as _os
+
+from swing_screen import JOURNAL_FILE as _JF
+
+if _os.path.exists(_JF):
+    _rows = []
+    for _line in open(_JF, encoding="utf-8"):
+        try:
+            _rows.append(_json.loads(_line))
+        except Exception:
+            pass
+    if _rows:
+        _j = pd.DataFrame(_rows)
+        _open = _j[_j.status == "open"]
+        _res = _j[_j.status == "resolved"]
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Open", len(_open))
+        m2.metric("Resolved", len(_res))
+        if len(_res):
+            _net = _res.ret_net.astype(float)
+            m3.metric("Win rate", f"{(_net > 0).mean()*100:.0f}%")
+            m4.metric("Net P&L (sum)", f"{_net.sum()*100:+.2f}%")
+        _tab1, _tab2 = st.tabs([f"Open ({len(_open)})", f"Resolved ({len(_res)})"])
+        with _tab1:
+            if len(_open):
+                _o = _open[["symbol", "direction", "signal", "signal_date",
+                            "close", "target", "stop"]].copy()
+                _o.columns = ["Symbol", "Dir", "Signal", "Signal date",
+                              "Ref close", "Target", "Stop"]
+                _o.index = range(1, len(_o) + 1)
+                st.dataframe(_o, use_container_width=True)
+            else:
+                st.info("No open paper trades — run `python swing_screen.py --journal`.")
+        with _tab2:
+            if len(_res):
+                _r = _res[["symbol", "direction", "signal", "signal_date",
+                           "entry_px", "exit_px", "exit_date", "outcome",
+                           "ret_net"]].copy()
+                _r["ret_net"] = (_r.ret_net.astype(float) * 100).round(2)
+                _r.columns = ["Symbol", "Dir", "Signal", "Signal date", "Entry",
+                              "Exit", "Exit date", "Outcome", "Net %"]
+                _r.index = range(1, len(_r) + 1)
+                st.dataframe(_r.sort_values("Exit date", ascending=False),
+                             use_container_width=True)
+            else:
+                st.info("Nothing resolved yet — trades resolve within 10 sessions "
+                        "(`python swing_tracker.py`, or the 16:30 autopilot).")
+else:
+    st.info("No journal yet — run `python swing_screen.py --journal` once, "
+            "or wait for the 16:30 autopilot.")
+
 with st.expander("🧠 Learner state — what the system has learned so far"):
     st.text(SwingLearner().report())
     st.caption("Weights move off 1.00 only after ≥20 resolved trades in a bucket "
