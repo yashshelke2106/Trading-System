@@ -137,10 +137,26 @@ if _os.path.exists(_JF):
             if len(_open):
                 _o = _open[["symbol", "direction", "signal", "signal_date",
                             "close", "target", "stop"]].copy()
-                _o.columns = ["Symbol", "Dir", "Signal", "Signal date",
-                              "Ref close", "Target", "Stop"]
+                # target DATE doesn't exist until the target is hit — show the
+                # expected window instead: entry next session, typical winner
+                # ~5 sessions (15y avg 5.4), hard time-exit at 10 sessions.
+                _sd = pd.to_datetime(_o.signal_date)
+                _o["entry_est"] = (_sd + pd.offsets.BDay(1)).dt.date
+                _o["target_window"] = [
+                    f"{(d + pd.offsets.BDay(3)).date():%d %b}–{(d + pd.offsets.BDay(7)).date():%d %b}"
+                    for d in _sd]
+                _o["deadline"] = (_sd + pd.offsets.BDay(11)).dt.date
+                _o = _o[["symbol", "direction", "signal", "signal_date", "entry_est",
+                         "close", "target", "stop", "target_window", "deadline"]]
+                _o.columns = ["Symbol", "Dir", "Signal", "Signal date", "Entry (est)",
+                              "Ref close", "Target ₹", "Stop ₹",
+                              "Typical target window*", "Time-exit deadline"]
                 _o.index = range(1, len(_o) + 1)
                 st.dataframe(_o, use_container_width=True)
+                st.caption("*Winners historically hit target in ~5.4 sessions (15y avg); "
+                           "the actual **target date** appears in the Resolved tab as "
+                           "'Target/SL date' once price reaches it. Dates approximate "
+                           "(business days; NSE holidays not excluded).")
             else:
                 st.info("No open paper trades — run `python swing_screen.py --journal`.")
         with _tab2:
@@ -150,9 +166,9 @@ if _os.path.exists(_JF):
                            "ret_net"]].copy()
                 _r["ret_net"] = (_r.ret_net.astype(float) * 100).round(2)
                 _r.columns = ["Symbol", "Dir", "Signal", "Signal date", "Entry",
-                              "Exit", "Exit date", "Outcome", "Net %"]
+                              "Exit", "Target/SL date", "Outcome", "Net %"]
                 _r.index = range(1, len(_r) + 1)
-                st.dataframe(_r.sort_values("Exit date", ascending=False),
+                st.dataframe(_r.sort_values("Target/SL date", ascending=False),
                              use_container_width=True)
             else:
                 st.info("Nothing resolved yet — trades resolve within 10 sessions "
