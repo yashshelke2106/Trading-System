@@ -174,6 +174,16 @@ def main() -> int:
     print("=" * 78)
     print("SWING SCREEN - symmetric 7-gate framework + outcome learner")
     print("=" * 78)
+
+    # decay monitor (stage 7): if the strategy is RETIRED, nothing is funded
+    from core.strategy_health import health_line, load_health
+    health = load_health()
+    print(health_line(health))
+    retired = bool(health and health.get("status") == "RETIRED")
+    if retired:
+        print("*** STRATEGY RETIRED by pre-registered decay rule (rolling PF < 0.90).")
+        print("*** Candidates below are PAPER/BENCH ONLY. Fund nothing until the")
+        print("*** monitor reinstates (rolling PF >= 1.05). Core stays in allocation.")
     print(f"Gate 1  NIFTY {nifty:.0f} vs 200DMA {ma:.0f} ({dist:+.2f}%) -> "
           f"{regime_state.upper()}: {allowed.upper()} side active")
     if allowed == "short":

@@ -10,6 +10,7 @@ from __future__ import annotations
 import pandas as pd
 import streamlit as st
 
+from core.strategy_health import load_health
 from core.swing_learner import SwingLearner
 from swing_screen import MIN_TARGET_PCT, fetch, regime, screen
 
@@ -78,6 +79,34 @@ if blocked:
     with st.expander(f"Blocked by regime gate: {len(blocked)} "
                      f"{blocked[0]['direction']} setups (watchlist)"):
         st.dataframe(_table(blocked), use_container_width=True)
+
+st.subheader("🩺 Strategy health — decay monitor & persistence")
+_h = load_health()
+if _h:
+    _f = _h["funded_side"]
+    _clr = {"HEALTHY": "🟢", "WARN": "🟡", "RETIRED": "🔴", "COLLECTING": "⚪"}.get(_h["status"], "⚪")
+    h1, h2, h3, h4 = st.columns(4)
+    h1.metric("Status", f"{_clr} {_h['status']}")
+    h2.metric(f"Rolling-{_h['rules']['window']} PF",
+              f"{_f['rolling_pf']}" if _f["rolling_pf"] is not None else "—")
+    h3.metric("Persistence (live ÷ backtest)",
+              f"{_f['persistence']:.2f}" if _f.get("persistence") is not None else "—",
+              help="1.0 = full backtested edge showing up live; <0.5 = mostly curve fit")
+    h4.metric("Resolved (funded side)", _f["n_resolved"])
+    if _h["status"] == "RETIRED":
+        st.error("🔴 **STRATEGY RETIRED** by the pre-registered decay rule "
+                 f"(rolling PF < {_h['rules']['retire_pf']}). Fund **nothing**; "
+                 "the paper bench keeps running. Reinstates automatically at "
+                 f"rolling PF ≥ {_h['rules']['reinstate_pf']}.")
+    elif _h["status"] == "WARN":
+        st.warning(f"🟡 Edge weakening: {'; '.join(_h['reasons'])}. "
+                   "Reduce size; do not add new capital to the sleeve.")
+    st.caption(f"Rules pre-registered {_h['rules']['registered']} — retire < "
+               f"{_h['rules']['retire_pf']} PF, reinstate ≥ {_h['rules']['reinstate_pf']}, "
+               f"window {_h['rules']['window']} trades. Short bench: "
+               f"n={_h['paper_bench_short']['n_resolved']} resolved (paper only).")
+else:
+    st.info("No health data yet — appears after the first paper trades resolve (~Jul 21).")
 
 st.subheader("📒 Paper trades (journal → tracker → learner)")
 import json as _json

@@ -25,6 +25,7 @@ import pandas as pd
 
 warnings.filterwarnings("ignore")
 
+from core.strategy_health import compute_health, health_line, load_health, save_health
 from core.swing_learner import SwingLearner
 from swing_screen import JOURNAL_FILE, YMAP
 
@@ -90,6 +91,7 @@ def main() -> int:
     open_rows = [r for r in rows if r.get("status") == "open"]
     if not open_rows:
         print("no open paper trades to resolve")
+        print(health_line(load_health()))
         if args.report:
             print(SwingLearner().report())
         return 0
@@ -129,6 +131,15 @@ def main() -> int:
 
     still = sum(1 for r in rows if r.get("status") == "open")
     print(f"resolved {resolved}, still open {still}, learner updated")
+
+    # decay monitor + persistence (stages 5 & 7) — pre-registered rules
+    prev = load_health()
+    health = compute_health(rows, prev_status=prev["status"] if prev else None)
+    save_health(health)
+    print(health_line(health))
+    if health["status"] == "RETIRED":
+        print("*** DECAY TRIGGER FIRED: fund NOTHING; paper bench continues. ***")
+
     if args.report:
         print()
         print(SwingLearner().report())
