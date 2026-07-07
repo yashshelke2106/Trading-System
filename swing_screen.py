@@ -177,7 +177,9 @@ def main() -> int:
     print(f"Gate 1  NIFTY {nifty:.0f} vs 200DMA {ma:.0f} ({dist:+.2f}%) -> "
           f"{regime_state.upper()}: {allowed.upper()} side active")
     if allowed == "short":
-        print("        (shorts execute via STOCK FUTURES - no overnight cash shorts in India)")
+        print("        *** SHORTS ARE PAPER-ONLY: 15y evidence (2,816 trades) = PF 0.65,")
+        print("        *** -125bp/trade. DO NOT fund short swings. Risk-off = stand aside")
+        print("        *** in cash; the learner keeps testing shorts on paper only.")
 
     data = fetch()
     cands = screen(data, learner, regime_state)

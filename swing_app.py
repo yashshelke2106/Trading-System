@@ -45,9 +45,11 @@ c3.metric("Gate 1 · Regime", "RISK-ON" if risk_on else "RISK-OFF",
           f"{allowed.upper()} side active")
 
 if allowed == "short":
-    st.warning("SHORT regime — short swings execute via **stock futures** "
-               "(India allows no overnight retail cash shorts). Futures cost "
-               "~0.10% RT but carry lot-size and margin obligations.")
+    st.error("🛑 **SHORTS ARE PAPER-ONLY — do not fund.** 15-year evidence "
+             "(2,816 trades, all 100 stocks): shorting rallies in downtrends "
+             "loses **−125 bp/trade, PF 0.65** even at futures costs. "
+             "Risk-off = **stand aside in cash**. The learner keeps testing "
+             "shorts on paper; the money waits for the long side.")
 
 cands = _candidates(regime_state)
 tradeable = [x for x in cands if x["direction"] == allowed]
