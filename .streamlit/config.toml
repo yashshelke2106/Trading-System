@@ -1,0 +1,5 @@
+# Project default port: any bare `streamlit run <app>` goes to 8503 so it can
+# NEVER collide with the Swing Finder. All swing launchers pass
+# --server.port 8501 explicitly.
+[server]
+port = 8503
