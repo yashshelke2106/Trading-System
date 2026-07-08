@@ -132,6 +132,34 @@ if _os.path.exists(_JF):
             _net = _res.ret_net.astype(float)
             m3.metric("Win rate", f"{(_net > 0).mean()*100:.0f}%")
             m4.metric("Net P&L (sum)", f"{_net.sum()*100:+.2f}%")
+
+        # ── P&L view (paper trades are unsized — pick a notional to see ₹) ──
+        if len(_res):
+            _net = _res.ret_net.astype(float)
+            _gw, _gl = _net[_net > 0].sum(), -_net[_net <= 0].sum()
+            _pf = (_gw / _gl) if _gl > 0 else float("inf")
+            p1, p2 = st.columns([1, 3])
+            with p1:
+                _notional = st.number_input(
+                    "₹ per trade (paper sizing)", min_value=5000, max_value=1000000,
+                    value=50000, step=5000,
+                    help="Paper trades are unsized. This converts % returns to ₹ "
+                         "as if each trade used this notional.")
+                _rs = (_net * _notional)
+                st.metric("Total P&L", f"₹{_rs.sum():+,.0f}")
+                st.metric("Avg / trade", f"₹{_rs.mean():+,.0f}")
+                st.metric("Profit factor", f"{_pf:.2f}" if _pf != float("inf") else "∞")
+                _best, _worst = _rs.max(), _rs.min()
+                st.caption(f"Best ₹{_best:+,.0f} · Worst ₹{_worst:+,.0f}")
+            with p2:
+                _eq = _res.assign(net=_net).sort_values("exit_date")
+                _eq["Cumulative ₹ P&L"] = (_eq.net * _notional).cumsum().round(0)
+                st.line_chart(_eq.set_index("exit_date")["Cumulative ₹ P&L"],
+                              height=260)
+                st.caption("Equity curve of resolved paper trades (₹ at the chosen "
+                           "notional, net of costs). Judge after ≥30 resolved — "
+                           "Gate 7.")
+
         _tab1, _tab2 = st.tabs([f"Open ({len(_open)})", f"Resolved ({len(_res)})"])
         with _tab1:
             if len(_open):
@@ -167,9 +195,10 @@ if _os.path.exists(_JF):
                 _r = _res[["symbol", "direction", "signal", "signal_date",
                            "entry_px", "exit_px", "exit_date", "outcome",
                            "ret_net"]].copy()
+                _r["pnl_rs"] = (_r.ret_net.astype(float) * _notional).round(0)
                 _r["ret_net"] = (_r.ret_net.astype(float) * 100).round(2)
                 _r.columns = ["Symbol", "Dir", "Signal", "Signal date", "Entry",
-                              "Exit", "Target/SL date", "Outcome", "Net %"]
+                              "Exit", "Target/SL date", "Outcome", "Net %", "P&L ₹"]
                 _r.index = range(1, len(_r) + 1)
                 st.dataframe(_r.sort_values("Target/SL date", ascending=False),
                              use_container_width=True)
