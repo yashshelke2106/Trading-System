@@ -761,10 +761,18 @@ def main():
                 break
             continue
 
-        _scan(engine, api, args.top, universe=universe,
-              orb_only=args.orb_only, vol_only=args.vol_only)
+        try:
+            _scan(engine, api, args.top, universe=universe,
+                  orb_only=args.orb_only, vol_only=args.vol_only)
+            _consec_errors = 0
+        except Exception as e:
+            _consec_errors = globals().get('_consec_errors', 0) + 1
+            print(f'[scan error #{_consec_errors}] {e}')
 
-        for _ in range(SCAN_INTERVAL_SEC):
+        # adaptive backoff: errors double the wait (max 10 min) to respect
+        # API rate limits instead of hammering a failing endpoint
+        _wait = min(SCAN_INTERVAL_SEC * (2 ** globals().get('_consec_errors', 0)), 600)
+        for _ in range(int(_wait)):
             if not _running:
                 break
             time.sleep(1)

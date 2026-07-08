@@ -211,8 +211,8 @@ class AutoTuner:
                 with open(TUNER_FILE) as f:
                     data = json.load(f)
                 return data.get("trade_history", [])
-            except Exception:
-                pass
+            except (json.JSONDecodeError, OSError) as e:
+                log.warning(f"tuner history unreadable ({e}) — starting empty")
         return []
 
     def record_trade(self, symbol: str, pnl: float, pnl_pct: float,
@@ -412,8 +412,8 @@ class VolumeSurgeScanner:
                 if df is not None and len(df) >= 20:
                     avg = float(df["volume"].rolling(20).mean().iloc[-1])
                     return sym, avg
-            except Exception:
-                pass
+            except Exception as e:
+                log.debug(f"vol-avg fetch failed {sym}: {e}")
             return sym, 0.0
 
         refreshed: Dict[str, float] = {}

@@ -146,10 +146,13 @@ if _os.path.exists(_JF):
                     f"{(d + pd.offsets.BDay(3)).date():%d %b}–{(d + pd.offsets.BDay(7)).date():%d %b}"
                     for d in _sd]
                 _o["deadline"] = (_sd + pd.offsets.BDay(11)).dt.date
+                _sign = _o.direction.map({"long": 1, "short": -1}).fillna(1)
+                _o["target_pct"] = ((_o.target / _o.close - 1) * 100 * _sign).round(2)
                 _o = _o[["symbol", "direction", "signal", "signal_date", "entry_est",
-                         "close", "target", "stop", "target_window", "deadline"]]
+                         "close", "target", "target_pct", "stop", "target_window",
+                         "deadline"]]
                 _o.columns = ["Symbol", "Dir", "Signal", "Signal date", "Entry (est)",
-                              "Ref close", "Target ₹", "Stop ₹",
+                              "Ref close", "Target ₹", "Target %", "Stop ₹",
                               "Typical target window*", "Time-exit deadline"]
                 _o.index = range(1, len(_o) + 1)
                 st.dataframe(_o, use_container_width=True)
