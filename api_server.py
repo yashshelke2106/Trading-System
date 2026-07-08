@@ -601,6 +601,53 @@ async def get_allocation(refresh: bool = False):
                 "alert": None, "error": str(e)}
 
 
+# ── Swing framework (no-API strategy: screen + paper journal + health) ───────
+
+@app.get("/api/swing")
+async def get_swing():
+    """Swing tab payload: last screen output, paper journal (open/resolved),
+    strategy health (decay monitor) and learner buckets. All file-based —
+    no Dhan credentials involved."""
+    def _load():
+        out = {"screen": None, "open": [], "resolved": [], "health": None,
+               "learner": []}
+        p = os.path.join("logs", "swing_screen.json")
+        if os.path.exists(p):
+            with open(p, encoding="utf-8") as f:
+                out["screen"] = json.load(f)
+        jf = os.path.join("logs", "swing_paper_journal.jsonl")
+        if os.path.exists(jf):
+            for line in open(jf, encoding="utf-8"):
+                try:
+                    r = json.loads(line)
+                except Exception:
+                    continue
+                (out["resolved"] if r.get("status") == "resolved"
+                 else out["open"]).append(r)
+        from core.strategy_health import load_health
+        out["health"] = load_health()
+        lf = os.path.join("logs", "swing_learner.json")
+        if os.path.exists(lf):
+            with open(lf, encoding="utf-8") as f:
+                buckets = json.load(f).get("buckets", {})
+            from core.swing_learner import SwingLearner
+            L = SwingLearner()
+            for key, b in sorted(buckets.items()):
+                d, s, reg = key.split("|")
+                out["learner"].append({
+                    "direction": d, "signal": s, "regime": reg,
+                    "n": b["n"], "wins": b["wins"],
+                    "weight": L.weight(d, s, reg),
+                })
+        return out
+
+    try:
+        return await _run(_load)
+    except Exception as e:
+        return {"screen": None, "open": [], "resolved": [], "health": None,
+                "learner": [], "error": str(e)}
+
+
 # ── Intelligence / RAG ────────────────────────────────────────────────────────
 
 @app.get("/api/intelligence")

@@ -29,6 +29,7 @@ export const fetchChain      = (sym = "NIFTY") => apiFetch(`/api/chain?symbol=${
 export const fetchSpikeAlerts = (minConf = 55) => apiFetch(`/api/spike-alerts?min_confidence=${minConf}`)
 export const fetchAccuracy      = ()                => apiFetch("/api/accuracy")
 export const fetchAllocation    = (refresh = false) => apiFetch(`/api/allocation${refresh ? "?refresh=true" : ""}`)
+export const fetchSwing         = ()                => apiFetch("/api/swing")
 export const fetchIntelligence  = ()                => apiFetch("/api/intelligence")
 export const fetchLearning      = ()                => apiFetch("/api/learning")
 
