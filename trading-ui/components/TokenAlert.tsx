@@ -25,10 +25,20 @@ export default function TokenAlert() {
   }
 
   useEffect(() => {
+    // persistent dismiss: users on the no-API strategy (Allocation + Swing)
+    // don't need a Dhan token, so a dismissal should stick across sessions.
+    if (typeof window !== "undefined" && localStorage.getItem("tokenAlertDismissed") === "1") {
+      setDismissed(true)
+    }
     poll()
     const t = setInterval(poll, 60_000)
     return () => clearInterval(t)
   }, [])
+
+  const dismiss = () => {
+    setDismissed(true)
+    if (typeof window !== "undefined") localStorage.setItem("tokenAlertDismissed", "1")
+  }
 
   const needsAlert = !valid || (hoursLeft !== null && hoursLeft < 2)
   if (!needsAlert || dismissed) return null
@@ -74,17 +84,16 @@ export default function TokenAlert() {
             fontSize: ".68em", fontWeight: 800, letterSpacing: ".1em",
             textTransform: "uppercase", color: clr,
           }}>
-            {isExpired ? "⚠ Dhan Token Expired" : `⚠ Token Expiring — ${hoursLeft?.toFixed(0)}h left`}
+            {isExpired ? "Live F&O scanner: token needed" : `Token expiring — ${hoursLeft?.toFixed(0)}h left`}
           </span>
           <span style={{ fontSize: ".68em", color: "var(--txd)" }}>
-            {isExpired
-              ? "Scanner paused — paste new JWT to resume"
-              : "Refresh before market open to avoid interruption"}
+            Optional — only the live intraday F&O scanner uses it. The Allocation &amp;
+            Swing tabs work fully without any Dhan token. Dismiss to hide for good.
           </span>
         </div>
         <button
-          onClick={() => setDismissed(true)}
-          title="Dismiss (will re-appear if still expired)"
+          onClick={dismiss}
+          title="Dismiss permanently (Allocation & Swing don't need a token)"
           style={{
             background: "none", border: "none", color: "var(--txs)",
             cursor: "pointer", fontSize: ".82em", padding: "2px 6px", lineHeight: 1,
