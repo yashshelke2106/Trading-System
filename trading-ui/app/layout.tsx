@@ -3,6 +3,7 @@ import "./globals.css"
 import IndexBar from "@/components/IndexBar"
 import MarketStatusBar from "@/components/MarketStatus"
 import NavBar from "@/components/NavBar"
+import VersionStamp from "@/components/VersionStamp"
 
 export const metadata: Metadata = {
   title: "F&O Signal Terminal",
@@ -32,6 +33,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             <MarketStatusBar />
           </div>
           {children}
+          <VersionStamp />
         </main>
       </body>
     </html>

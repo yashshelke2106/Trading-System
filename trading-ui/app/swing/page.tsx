@@ -64,7 +64,11 @@ export default function SwingPage() {
   const reload = useCallback(async () => {
     try { setData(await fetchSwing()) } catch {}
   }, [])
-  useEffect(() => { reload() }, [reload])
+  useEffect(() => {
+    reload()
+    const id = setInterval(reload, 60000)   // auto-refresh — never goes stale
+    return () => clearInterval(id)
+  }, [reload])
 
   const scr = data?.screen
   const riskOn = scr?.regime === "risk_on"

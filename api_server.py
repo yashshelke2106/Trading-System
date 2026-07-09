@@ -281,6 +281,30 @@ def get_stats():
     return stats
 
 
+_BOOT_TS = datetime.now().isoformat(timespec="seconds")
+
+
+@app.get("/api/version")
+def version():
+    """Build stamp so the UI can prove it's current: git short hash + commit
+    subject/date + API boot time. If the hash shown in the browser matches
+    `git log -1`, you're looking at up-to-date code."""
+    import subprocess
+    def _git(args):
+        try:
+            return subprocess.run(["git", *args], capture_output=True, text=True,
+                                  timeout=3, cwd=os.path.dirname(__file__)).stdout.strip()
+        except Exception:
+            return ""
+    return {
+        "commit": _git(["rev-parse", "--short", "HEAD"]) or "unknown",
+        "subject": _git(["log", "-1", "--pretty=%s"])[:80],
+        "commit_date": _git(["log", "-1", "--date=short", "--pretty=%ad"]),
+        "api_boot": _BOOT_TS,
+        "served": datetime.now().isoformat(timespec="seconds"),
+    }
+
+
 @app.get("/api/health")
 def health():
     """Rich health probe — exposes silent failure modes.

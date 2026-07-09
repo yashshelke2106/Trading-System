@@ -85,7 +85,11 @@ export default function AllocationPage() {
     setRefreshing(false)
   }, [])
 
-  useEffect(() => { reload() }, [reload])
+  useEffect(() => {
+    reload()
+    const id = setInterval(reload, 60000)   // auto-refresh — never goes stale
+    return () => clearInterval(id)
+  }, [reload])
 
   const t = data?.targets?.[variant]
   const riskOn = t?.state === "risk_on" || t?.state === "core_only"
