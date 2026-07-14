@@ -9,8 +9,8 @@ cd /d C:\Users\yashs\trading_system
 set PYTHONIOENCODING=utf-8
 
 REM ── [1/5] Free the ports (targeted; never kills scheduled tasks) ──
-echo [1/5] Freeing ports 8000/3000/8501...
-for %%P in (8000 3000 8501) do (
+echo [1/5] Freeing ports 8000/3000/8511...
+for %%P in (8000 3000 8511) do (
     for /f "tokens=5" %%a in ('netstat -aon ^| find ":%%P" ^| find "LISTENING"') do taskkill /PID %%a /F >nul 2>&1
 )
 
@@ -28,20 +28,20 @@ start "FO-Executor" cmd /k "color 0D && echo [EXECUTOR paper] && python aladdin_
 start "FO-API"      cmd /k "color 0B && echo [API :8000] && python -m uvicorn api_server:app --port 8000"
 
 REM ── [5/5] Both UIs ───────────────────────────────────────────────
-echo [5/5] Starting UIs (Next.js :3000 + Swing Finder :8501)...
+echo [5/5] Starting UIs (Next.js :3000 + Swing Finder :8511)...
 start "FO-UI-Next"   cmd /k "color 0E && echo [NEXT.JS :3000] && cd trading-ui && npm run dev"
-start "FO-UI-Swing"  cmd /k "color 0C && echo [SWING FINDER :8501 - no API keys] && streamlit run swing_app.py --server.port 8501"
+start "FO-UI-Swing"  cmd /k "color 0C && echo [SWING FINDER :8511 - no API keys] && streamlit run swing_app.py --server.port 8511"
 
 call :wait_for_http "http://localhost:8000/api/health" "API"
 call :wait_for_http "http://localhost:3000"            "Next.js"
-call :wait_for_http "http://localhost:8501"            "Swing Finder"
+call :wait_for_http "http://localhost:8511"            "Swing Finder"
 start http://localhost:3000
-start http://localhost:8501
+start http://localhost:8511
 
 echo.
 echo  ALL RUNNING:
 echo    Terminal (Next.js)   http://localhost:3000   signals/chain/allocation
-echo    Swing Finder         http://localhost:8501   candidates/trades/health
+echo    Swing Finder         http://localhost:8511   candidates/trades/health
 echo    API                  http://localhost:8000
 echo  Stop everything: stop_trading.bat
 goto :eof

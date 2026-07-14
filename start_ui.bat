@@ -9,7 +9,7 @@ cd /d C:\Users\yashs\trading_system
 set PYTHONIOENCODING=utf-8
 
 REM free UI/API ports (targeted)
-for %%P in (8000 3000 8501) do (
+for %%P in (8000 3000 8511) do (
     for /f "tokens=5" %%a in ('netstat -aon ^| find ":%%P" ^| find "LISTENING"') do taskkill /PID %%a /F >nul 2>&1
 )
 
@@ -18,15 +18,15 @@ start "FO-API"      cmd /k "color 0B && echo [API :8000] && python -m uvicorn ap
 REM Next.js terminal
 start "FO-UI-Next"  cmd /k "color 0E && echo [NEXT.JS :3000] && cd trading-ui && npm run dev"
 REM Streamlit Swing Finder (no API keys at all)
-start "FO-UI-Swing" cmd /k "color 0C && echo [SWING FINDER :8501] && streamlit run swing_app.py --server.port 8501"
+start "FO-UI-Swing" cmd /k "color 0C && echo [SWING FINDER :8511] && streamlit run swing_app.py --server.port 8511"
 
 call :wait_for_http "http://localhost:3000" "Next.js"
-call :wait_for_http "http://localhost:8501" "Swing Finder"
+call :wait_for_http "http://localhost:8511" "Swing Finder"
 start http://localhost:3000
-start http://localhost:8501
+start http://localhost:8511
 
 echo.
-echo  UIs running:  :3000 (terminal)   :8501 (swing finder)
+echo  UIs running:  :3000 (terminal)   :8511 (swing finder)
 echo  Stop: stop_trading.bat
 goto :eof
 
