@@ -1,5 +1,9 @@
-# Project default port: any bare `streamlit run <app>` goes to 8503 so it can
-# NEVER collide with the Swing Finder. All swing launchers pass
-# --server.port 8501 explicitly.
-[server]
-port = 8503
+# NO port pin here — with no explicit port, Streamlit auto-increments
+# (8501 busy -> 8502 -> 8503 ...), so MULTIPLE dashboards can run at once.
+#
+# Port map (launchers pass ports explicitly, so these are deterministic):
+#   8501  swing_app.py       -> start_swing.bat / run_system.bat / start_ui.bat
+#   8503  streamlit_app.py   -> start_legacy.bat (legacy dashboard, needs Dhan token)
+#   85xx  anything ad-hoc    -> `streamlit run <app>` picks the next free port
+[browser]
+gatherUsageStats = false
