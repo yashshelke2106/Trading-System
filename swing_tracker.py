@@ -46,7 +46,14 @@ def _load_journal() -> list:
 
 
 def _resolve(row: dict, bars: pd.DataFrame) -> dict | None:
-    """Gap-honest walk. Returns resolution dict or None if still open."""
+    """Gap-honest walk. Returns resolution dict or None if still open.
+
+    Two exit styles (row['exit_style']):
+      'fixed' / absent — legacy: fixed target + stop + 10-session time exit.
+      'C'              — adopted 2026-07-15 (docs/research/exit_style_gate.md):
+                          stop 2xATR; WINNERS ride until the close crosses the
+                          5-DMA against the position, then exit next open;
+                          20-session cap. Cuts losses fast, lets winners run."""
     sig_d = pd.Timestamp(row["signal_date"])
     fut = bars[bars.index > sig_d]
     if len(fut) < 1:
@@ -55,20 +62,32 @@ def _resolve(row: dict, bars: pd.DataFrame) -> dict | None:
     lng = row["direction"] == "long"
     sign = 1 if lng else -1
     tgt, stp = float(row["target"]), float(row["stop"])
+    style_c = row.get("exit_style") == "C"
+    max_hold = 20 if style_c else MAX_HOLD
+    ma5 = bars.close.rolling(5).mean().reindex(fut.index)
+    pending_exit = False
     for j in range(len(fut)):
         o, h, l, c = (float(fut.open.iloc[j]), float(fut.high.iloc[j]),
                       float(fut.low.iloc[j]), float(fut.close.iloc[j]))
+        if pending_exit:                      # style C: momentum broke yesterday
+            return _mk(row, entry, o, fut.index[j], "MOM_EXIT", sign)
         if j > 0:  # gap check at the open
             if (lng and o <= stp) or (not lng and o >= stp):
                 return _mk(row, entry, o, fut.index[j], "SL_GAP", sign)
-            if (lng and o >= tgt) or (not lng and o <= tgt):
+            if not style_c and ((lng and o >= tgt) or (not lng and o <= tgt)):
                 return _mk(row, entry, o, fut.index[j], "TGT_GAP", sign)
         # intraday: stop BEFORE target (conservative)
         if (lng and l <= stp) or (not lng and h >= stp):
             return _mk(row, entry, stp, fut.index[j], "SL_HIT", sign)
-        if (lng and h >= tgt) or (not lng and l <= tgt):
+        if not style_c and ((lng and h >= tgt) or (not lng and l <= tgt)):
             return _mk(row, entry, tgt, fut.index[j], "TARGET_HIT", sign)
-        if j + 1 >= MAX_HOLD:
+        if style_c:
+            m5 = float(ma5.iloc[j]) if not pd.isna(ma5.iloc[j]) else None
+            in_profit = (c > entry) if lng else (c < entry)
+            broke = m5 is not None and ((lng and c < m5) or (not lng and c > m5))
+            if in_profit and broke:
+                pending_exit = True           # exit at NEXT open (no lookahead)
+        if j + 1 >= max_hold:
             return _mk(row, entry, c, fut.index[j], "TIME_EXIT", sign)
     return None
 

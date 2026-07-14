@@ -147,6 +147,7 @@ def journal_candidates(cands: list, regime_state: str) -> int:
                 continue
             f.write(json.dumps({**x, "signal_date": x["bar"],
                                 "regime": regime_state, "status": "open",
+                                "exit_style": "C",   # adopted 2026-07-15: winners ride until close crosses 5DMA
                                 "journaled": datetime.now().isoformat(timespec="seconds")}) + "\n")
             n += 1
     return n

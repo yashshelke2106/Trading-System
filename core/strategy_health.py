@@ -41,7 +41,11 @@ RETIRE_PF = 0.90
 REINSTATE_PF = 1.05
 WARN_PF = 1.00
 WARN_PERSISTENCE = 0.50
-BACKTEST_BASELINE_BP = {"long": 18.1, "short": -125.1}   # 15y, net of costs
+# 15y net-of-cost baselines. Long updated 2026-07-15 on adopting exit style C
+# (ride winners until close<5DMA): +34.2bp replaces the fixed-target +18.1bp
+# (docs/research/exit_style_gate.md). Short: no C-style 15y baseline yet ->
+# None disables the persistence ratio for the paper bench.
+BACKTEST_BASELINE_BP = {"long": 34.2, "short": None}
 
 
 def _pf(rets: List[float]) -> float:
