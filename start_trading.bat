@@ -17,7 +17,9 @@ REM Window 2: Paper-trading executor
 start "FO-Executor" cmd /k "color 0D && echo [EXECUTOR] Starting... && python aladdin_runner.py"
 
 REM Window 3: FastAPI backend
-start "FO-API" cmd /k "color 0B && echo [API] Starting on http://localhost:8000 && python -m uvicorn api_server:app --reload --port 8000"
+REM no --reload: the reloader parent/child pair wedges on Windows (zombie
+REM holds :8000 answering nothing) and killed children leave orphans.
+start "FO-API" cmd /k "color 0B && echo [API] Starting on http://localhost:8000 && python -m uvicorn api_server:app --port 8000"
 
 REM Window 4: Next.js UI
 start "FO-UI" cmd /k "color 0E && echo [UI] Starting on http://localhost:3000 && cd trading-ui && npm run dev"

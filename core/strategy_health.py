@@ -48,10 +48,13 @@ WARN_PERSISTENCE = 0.50
 BACKTEST_BASELINE_BP = {"long": 34.2, "short": None}
 
 
-def _pf(rets: List[float]) -> float:
+def _pf(rets: List[float]) -> Optional[float]:
+    """Profit factor; None when there are no losses yet (PF undefined —
+    and float('inf') is not JSON-encodable, which 500'd /api/swing when the
+    first resolutions were all winners, 2026-07-15)."""
     gw = sum(r for r in rets if r > 0)
     gl = -sum(r for r in rets if r <= 0)
-    return round(gw / gl, 3) if gl > 0 else float("inf")
+    return round(gw / gl, 3) if gl > 0 else None
 
 
 def _side_stats(rows: List[dict], direction: str) -> Dict:

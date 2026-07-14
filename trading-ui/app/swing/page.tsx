@@ -61,8 +61,14 @@ export default function SwingPage() {
   const [data, setData] = useState<SwingData | null>(null)
   const [notional, setNotional] = useState(50000)
 
+  const [fetchErr, setFetchErr] = useState<string | null>(null)
   const reload = useCallback(async () => {
-    try { setData(await fetchSwing()) } catch {}
+    try {
+      setData(await fetchSwing())
+      setFetchErr(null)
+    } catch (e) {
+      setFetchErr((e as Error).message)   // surface it — never a silent blank page
+    }
   }, [])
   useEffect(() => {
     reload()
@@ -88,6 +94,14 @@ export default function SwingPage() {
         <div className="secDot" style={{ background: "#00c896" }} />
         <div className="secTitle">Swing Framework · symmetric 7-gate + learner (no API keys)</div>
       </div>
+      {fetchErr && (
+        <div style={{
+          background: "rgba(255,61,94,.08)", border: "1px solid #ff3d5e", borderRadius: 8,
+          padding: "10px 14px", fontSize: ".8em", color: "#ff3d5e", fontWeight: 600,
+        }}>
+          ⚠ Backend unreachable: {fetchErr} — retrying every 60s automatically.
+        </div>
+      )}
       {data?.error && <div style={{ color: "#ff3d5e", fontSize: ".8em" }}>API error: {data.error}</div>}
 
       {/* Regime + health cards */}

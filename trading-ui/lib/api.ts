@@ -1,9 +1,20 @@
 const BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000"
 
 async function apiFetch(path: string) {
-  const res = await fetch(`${BASE}${path}`, { cache: "no-store" })
-  if (!res.ok) throw new Error(`${path} fetch failed: ${res.status}`)
-  return res.json()
+  // 8s timeout: a wedged/dead API must FAIL VISIBLY, not hang pages forever
+  const ctl = new AbortController()
+  const timer = setTimeout(() => ctl.abort(), 8000)
+  try {
+    const res = await fetch(`${BASE}${path}`, { cache: "no-store", signal: ctl.signal })
+    if (!res.ok) throw new Error(`${path} fetch failed: ${res.status}`)
+    return await res.json()
+  } catch (e) {
+    if ((e as Error).name === "AbortError")
+      throw new Error(`API not responding at ${BASE} — is the backend running? (.\\start_ui.bat)`)
+    throw e
+  } finally {
+    clearTimeout(timer)
+  }
 }
 
 async function apiPost(path: string, body: unknown) {
