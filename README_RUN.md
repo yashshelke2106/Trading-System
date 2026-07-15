@@ -71,7 +71,7 @@ stop_trading.bat
 |----|-----|---------|
 | Next.js (main)     | http://localhost:3000 | `cd trading-ui && npm run dev` |
 | API backend        | http://localhost:8000 | `python -m uvicorn api_server:app --reload --port 8000` |
-| Streamlit (legacy) | http://localhost:8501 | `streamlit run streamlit_app.py` |
+| Streamlit (legacy) | http://localhost:8501 | `streamlit run swing_app.py --server.port 8511` |
 
 ---
 

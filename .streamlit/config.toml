@@ -1,9 +1,8 @@
 # NO port pin here — with no explicit port, Streamlit auto-increments
 # (8501 busy -> 8502 -> 8503 ...), so MULTIPLE dashboards can run at once.
 #
-# Port map (launchers pass ports explicitly, so these are deterministic):
-#   8511  swing_app.py       -> launchers (dedicated, off other projects' 8501)
-#   8513  streamlit_app.py   -> start_legacy.bat (legacy dashboard, needs Dhan token)
-#   85xx  anything ad-hoc    -> `streamlit run <app>` picks the next free port
+# Only ONE Streamlit app remains (legacy streamlit_app.py + dashboard.py
+# deleted 2026-07-15):
+#   8511  swing_app.py  -> start_swing.bat (Swing Finder, no API keys)
 [browser]
 gatherUsageStats = false
