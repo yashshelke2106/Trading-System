@@ -63,10 +63,21 @@ MANUAL_CSV_COLS = [
 ]
 
 st.set_page_config(
-    page_title="F&O Terminal",
+    page_title="F&O Terminal (LEGACY)",
     page_icon="⚡",
     layout="wide",
     initial_sidebar_state="expanded",
+)
+
+# ── Self-identifying banner: stops the recurring "why am I seeing the old
+# dashboard" confusion. This is the LEGACY app (needs a Dhan token). The
+# ACTIVE no-API swing dashboard is the Swing Finder on :8511. ────────────────
+st.warning(
+    "**You are on the LEGACY dashboard** (needs a Dhan token). "
+    "The active **Swing Finder** (no API keys — swing trades, P&L, health) "
+    "is at **http://localhost:8511** — launch it with `start_swing.bat`. "
+    "The full terminal is the Next.js UI at **http://localhost:3000**.",
+    icon="⚠️",
 )
 
 # ── Institutional CSS ─────────────────────────────────────────────────────────
