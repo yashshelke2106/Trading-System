@@ -37,27 +37,29 @@ nifty, ma = _regime()
 dist = (nifty / ma - 1) * 100
 risk_on = nifty > ma
 regime_state = "risk_on" if risk_on else "risk_off"
-allowed = "long" if risk_on else "short"
 
 c1, c2, c3 = st.columns(3)
 c1.metric("NIFTY", f"{nifty:,.0f}")
 c2.metric("200-DMA", f"{ma:,.0f}", f"{dist:+.2f}% vs line")
 c3.metric("Gate 1 · Regime", "RISK-ON" if risk_on else "RISK-OFF",
-          f"{allowed.upper()} side active")
-
-if allowed == "short":
-    st.error("🛑 **SHORTS ARE PAPER-ONLY — do not fund.** 15-year evidence "
-             "(2,816 trades, all 100 stocks): shorting rallies in downtrends "
-             "loses **−125 bp/trade, PF 0.65** even at futures costs. "
-             "Risk-off = **stand aside in cash**. The learner keeps testing "
-             "shorts on paper; the money waits for the long side.")
+          "LONGS fundable" if risk_on else "STAND ASIDE",
+          delta_color="normal" if risk_on else "off")
 
 cands = _candidates(regime_state)
-tradeable = [x for x in cands if x["direction"] == allowed]
-blocked = [x for x in cands if x["direction"] != allowed]
+# FUNDING POLICY (see docs/research/short_side_policy.md): shorts are never
+# fundable — 15y evidence −125bp/trade, PF 0.65. They live on the paper bench.
+funded = [x for x in cands if x["direction"] == "long" and risk_on]
+bench = [x for x in cands if x not in funded]
 
-st.subheader(f"Tradeable now — {len(tradeable)} {allowed.upper()} candidates "
-             f"(target ≥ {MIN_TARGET_PCT}%, ranked by move × learner weight)")
+if risk_on:
+    st.subheader(f"✅ Funded candidates — {len(funded)} LONG "
+                 f"(target ≥ {MIN_TARGET_PCT}%, ranked by move × learner weight)")
+else:
+    st.subheader("🟡 Funded action: NONE — stand aside")
+    st.warning("Risk-off regime. Shorting is **not** the funded alternative — "
+               "15-year evidence (2,816 trades): **−125 bp/trade, PF 0.65**. "
+               "The correct trade is **cash** (the allocation engine already "
+               "holds it). Short setups below are the learner's paper bench.")
 
 def _table(rows):
     df = pd.DataFrame(rows)[["symbol", "direction", "signal", "close",
@@ -67,18 +69,21 @@ def _table(rows):
     df.index = range(1, len(df) + 1)
     return df
 
-if tradeable:
-    st.dataframe(_table(tradeable), use_container_width=True,
+if funded:
+    st.dataframe(_table(funded), use_container_width=True,
                  column_config={"Move %": st.column_config.NumberColumn(format="%.1f%%")})
-    st.download_button("Download CSV", _table(tradeable).to_csv().encode(),
+    st.download_button("Download CSV", _table(funded).to_csv().encode(),
                        "swing_candidates.csv", "text/csv")
-else:
-    st.info("No tradeable setups today — most days that is the correct answer.")
+elif risk_on:
+    st.info("No funded setups today — most days that is the correct answer.")
 
-if blocked:
-    with st.expander(f"Blocked by regime gate: {len(blocked)} "
-                     f"{blocked[0]['direction']} setups (watchlist)"):
-        st.dataframe(_table(blocked), use_container_width=True)
+if bench:
+    with st.expander(f"🧪 Paper bench — {len(bench)} setups (learner only, "
+                     "DO NOT FUND)"):
+        st.dataframe(_table(bench), use_container_width=True)
+        st.caption("Bench trades are journaled and resolved on paper so the "
+                   "learner can confirm or falsify them. Unlock condition for "
+                   "funding shorts: docs/research/short_side_policy.md.")
 
 st.subheader("🩺 Strategy health — decay monitor & persistence")
 _h = load_health()

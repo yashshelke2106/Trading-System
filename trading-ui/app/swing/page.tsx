@@ -78,9 +78,10 @@ export default function SwingPage() {
 
   const scr = data?.screen
   const riskOn = scr?.regime === "risk_on"
-  const allowed = riskOn ? "long" : "short"
-  const tradeable = (scr?.candidates ?? []).filter(c => c.direction === allowed)
-  const blocked = (scr?.candidates ?? []).filter(c => c.direction !== allowed)
+  // FUNDING POLICY (docs/research/short_side_policy.md): shorts are never
+  // fundable — 15y evidence −125bp/trade, PF 0.65. Bench = learner only.
+  const funded = (scr?.candidates ?? []).filter(c => c.direction === "long" && riskOn)
+  const bench = (scr?.candidates ?? []).filter(c => !(c.direction === "long" && riskOn))
   const res = data?.resolved ?? []
   const rets = res.map(r => Number(r.ret_net ?? 0))
   const wins = rets.filter(r => r > 0)
@@ -113,7 +114,7 @@ export default function SwingPage() {
               <div style={{ ...VAL, color: riskOn ? "#00c896" : "#f59e0b" }}>
                 {riskOn ? "RISK-ON" : "RISK-OFF"}
               </div>
-              <div style={{ fontSize: ".64em", color: "var(--txs)" }}>{allowed.toUpperCase()} side active</div>
+              <div style={{ fontSize: ".64em", color: "var(--txs)" }}>{riskOn ? "LONGS fundable" : "STAND ASIDE — cash"}</div>
             </div>
             <div style={CARD}>
               <div style={LBL}>NIFTY vs 200-DMA</div>
@@ -142,40 +143,74 @@ export default function SwingPage() {
         </div>
       )}
 
-      {/* Tradeable candidates */}
+      {/* Funded candidates — shorts are NEVER fundable (short_side_policy.md) */}
       <div className="secHdr">
         <div className="secDot" style={{ background: riskOn ? "#00c896" : "#f59e0b" }} />
         <div className="secTitle">
-          Tradeable candidates ({allowed}) · {tradeable.length}
-          {!riskOn && " · via stock futures"} {blocked.length > 0 && ` · ${blocked.length} ${blocked[0]?.direction} blocked by regime`}
+          {riskOn ? `Funded candidates (long) · ${funded.length}`
+                  : "Funded action: NONE — stand aside"}
         </div>
       </div>
-      <div style={{ overflow: "auto", border: "1px solid var(--bd)", borderRadius: 8, background: "var(--c1)" }}>
-        <table style={{ width: "100%", borderCollapse: "collapse" }}>
-          <thead><tr>{["#", "Symbol", "Dir", "Signal", "Close", "Target", "Target %", "Stop", "Learner W"].map(x => <th key={x} style={TH}>{x}</th>)}</tr></thead>
-          <tbody>
-            {!tradeable.length && (
-              <tr><td colSpan={9} style={{ ...TD, textAlign: "center", color: "var(--txd)", padding: 20 }}>
-                No tradeable setups — most days that&apos;s the correct answer.
-              </td></tr>
-            )}
-            {tradeable.slice(0, 15).map((c, i) => (
-              <tr key={c.symbol}>
-                <td style={{ ...TD, color: "var(--txs)" }}>{i + 1}</td>
-                <td style={{ ...TD, fontWeight: 800 }}>{c.symbol}</td>
-                <td style={{ ...TD, fontWeight: 700, color: c.direction === "long" ? "#00c896" : "#ff3d5e" }}>{c.direction.toUpperCase()}</td>
-                <td style={{ ...TD, color: "var(--txd)", fontSize: ".72em" }}>{c.signal}</td>
-                <td style={TD}>{fmt(c.close)}</td>
-                <td style={{ ...TD, color: "#00c896" }}>{fmt(c.target)}</td>
-                <td style={{ ...TD, color: "#00c896", fontWeight: 700 }}>{fmt(c.target_pct, 1)}%</td>
-                <td style={{ ...TD, color: "#ff3d5e" }}>{fmt(c.stop)}</td>
-                <td style={{ ...TD, color: c.weight > 1 ? "#00c896" : c.weight < 1 ? "#ff3d5e" : "var(--txs)" }}>{fmt(c.weight)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-      {scr && <div style={{ fontSize: ".68em", color: "var(--txs)" }}>Screen as of {scr.ts} · entry next open · 2×ATR target/stop · 10-session time exit · risk ≤1%/trade · sleeve ≤10% of capital</div>}
+      {!riskOn && (
+        <div style={{ background: "rgba(245,158,11,.06)", border: "1px solid rgba(245,158,11,.4)", borderRadius: 8, padding: "10px 14px", fontSize: ".78em", color: "#f59e0b" }}>
+          Risk-off regime. Shorting is <b>not</b> the funded alternative — 15-year evidence
+          (2,816 trades): <b>−125 bp/trade, PF 0.65</b>. The correct trade is <b>cash</b>
+          (the allocation engine already holds it). Short setups sit on the paper bench below.
+        </div>
+      )}
+      {riskOn && (
+        <div style={{ overflow: "auto", border: "1px solid var(--bd)", borderRadius: 8, background: "var(--c1)" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead><tr>{["#", "Symbol", "Dir", "Signal", "Close", "Target", "Target %", "Stop", "Learner W"].map(x => <th key={x} style={TH}>{x}</th>)}</tr></thead>
+            <tbody>
+              {!funded.length && (
+                <tr><td colSpan={9} style={{ ...TD, textAlign: "center", color: "var(--txd)", padding: 20 }}>
+                  No funded setups — most days that&apos;s the correct answer.
+                </td></tr>
+              )}
+              {funded.slice(0, 15).map((c, i) => (
+                <tr key={c.symbol}>
+                  <td style={{ ...TD, color: "var(--txs)" }}>{i + 1}</td>
+                  <td style={{ ...TD, fontWeight: 800 }}>{c.symbol}</td>
+                  <td style={{ ...TD, fontWeight: 700, color: "#00c896" }}>{c.direction.toUpperCase()}</td>
+                  <td style={{ ...TD, color: "var(--txd)", fontSize: ".72em" }}>{c.signal}</td>
+                  <td style={TD}>{fmt(c.close)}</td>
+                  <td style={{ ...TD, color: "#00c896" }}>{fmt(c.target)}</td>
+                  <td style={{ ...TD, color: "#00c896", fontWeight: 700 }}>{fmt(c.target_pct, 1)}%</td>
+                  <td style={{ ...TD, color: "#ff3d5e" }}>{fmt(c.stop)}</td>
+                  <td style={{ ...TD, color: c.weight > 1 ? "#00c896" : c.weight < 1 ? "#ff3d5e" : "var(--txs)" }}>{fmt(c.weight)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {bench.length > 0 && (
+        <details style={{ border: "1px solid var(--bd)", borderRadius: 8, background: "var(--c1)", padding: "8px 12px" }}>
+          <summary style={{ fontSize: ".74em", color: "var(--txd)", cursor: "pointer" }}>
+            🧪 Paper bench · {bench.length} setups (learner only — DO NOT FUND)
+          </summary>
+          <div style={{ overflow: "auto", marginTop: 8 }}>
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <thead><tr>{["Symbol", "Dir", "Signal", "Close", "Target", "Stop", "Learner W"].map(x => <th key={x} style={TH}>{x}</th>)}</tr></thead>
+              <tbody>
+                {bench.slice(0, 15).map(c => (
+                  <tr key={`${c.symbol}-${c.direction}`}>
+                    <td style={{ ...TD, fontWeight: 800 }}>{c.symbol}</td>
+                    <td style={{ ...TD, fontWeight: 700, color: c.direction === "long" ? "#00c896" : "#ff3d5e" }}>{c.direction.toUpperCase()}</td>
+                    <td style={{ ...TD, color: "var(--txd)", fontSize: ".72em" }}>{c.signal}</td>
+                    <td style={TD}>{fmt(c.close)}</td>
+                    <td style={TD}>{fmt(c.target)}</td>
+                    <td style={TD}>{fmt(c.stop)}</td>
+                    <td style={TD}>{fmt(c.weight)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </details>
+      )}
+      {scr && <div style={{ fontSize: ".68em", color: "var(--txs)" }}>Screen as of {scr.ts} · entry next open · stop 2×ATR · winners ride until close &lt; 5-DMA · risk ≤1%/trade · sleeve ≤10% of capital</div>}
 
       {/* Paper P&L */}
       <div className="secHdr">

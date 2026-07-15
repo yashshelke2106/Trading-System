@@ -186,38 +186,65 @@ def main() -> int:
         print("*** Candidates below are PAPER/BENCH ONLY. Fund nothing until the")
         print("*** monitor reinstates (rolling PF >= 1.05). Core stays in allocation.")
     print(f"Gate 1  NIFTY {nifty:.0f} vs 200DMA {ma:.0f} ({dist:+.2f}%) -> "
-          f"{regime_state.upper()}: {allowed.upper()} side active")
-    if allowed == "short":
-        print("        *** SHORTS ARE PAPER-ONLY: 15y evidence (2,816 trades) = PF 0.65,")
-        print("        *** -125bp/trade. DO NOT fund short swings. Risk-off = stand aside")
-        print("        *** in cash; the learner keeps testing shorts on paper only.")
+          f"{regime_state.upper()}")
 
     data = fetch()
     cands = screen(data, learner, regime_state)
-    tradeable = [x for x in cands if x["direction"] == allowed]
-    other = [x for x in cands if x["direction"] != allowed]
 
-    print(f"\nTRADEABLE now ({allowed} side): {len(tradeable)} candidates")
+    # ── FUNDING POLICY (structural, single source of truth) ──────────────
+    # Shorts are NEVER a funded recommendation: 15y evidence (2,816 trades)
+    # = PF 0.65, -125bp/trade net. They stay on the paper bench so the
+    # learner can falsify/confirm; docs/research/short_side_policy.md holds
+    # the unlock condition. Risk-off therefore means STAND ASIDE, not short.
+    for x in cands:
+        x["fundable"] = (x["direction"] == "long"
+                         and regime_state == "risk_on" and not retired)
+    funded = [x for x in cands if x["fundable"]]
+    bench = [x for x in cands if not x["fundable"]]
+    funded_action = ("long" if funded else "stand_aside")
+
     hdr = (f"{'#':>2} {'SYMBOL':<13}{'DIR':<6}{'SIGNAL':<18}"
            f"{'CLOSE':>9}{'TARGET':>9}{'STOP':>9}{'MOVE%':>7}{'W':>6}")
-    print(hdr); print("-" * len(hdr))
-    for i, x in enumerate(tradeable[:15], 1):
-        print(f"{i:>2} {x['symbol']:<13}{x['direction']:<6}{x['signal']:<18}"
-              f"{x['close']:>9}{x['target']:>9}{x['stop']:>9}"
-              f"{x['target_pct']:>6.1f}%{x['weight']:>6.2f}")
-    if other:
-        print(f"\n(blocked by regime gate: {len(other)} {other[0]['direction']} setups - watchlist)")
 
-    if args.journal and tradeable:
-        n = journal_candidates(tradeable, regime_state)
-        print(f"\njournaled {n} new paper trades -> {JOURNAL_FILE}")
-        print("resolve + learn with: python swing_tracker.py")
+    if funded:
+        print(f"\nFUNDED CANDIDATES (long): {len(funded)}")
+        print(hdr); print("-" * len(hdr))
+        for i, x in enumerate(funded[:15], 1):
+            print(f"{i:>2} {x['symbol']:<13}{x['direction']:<6}{x['signal']:<18}"
+                  f"{x['close']:>9}{x['target']:>9}{x['stop']:>9}"
+                  f"{x['target_pct']:>6.1f}%{x['weight']:>6.2f}")
+    else:
+        why = ("strategy RETIRED" if retired else
+               "risk-off regime - shorts are net-negative over 15y, not funded")
+        print(f"\nFUNDED ACTION: NONE - STAND ASIDE ({why}).")
+        print("Cash sits per the allocation engine. No funded swing trades today.")
+
+    if bench:
+        print(f"\nPAPER BENCH (learner only - DO NOT FUND): {len(bench)} setups")
+        print(hdr); print("-" * len(hdr))
+        for i, x in enumerate(bench[:10], 1):
+            print(f"{i:>2} {x['symbol']:<13}{x['direction']:<6}{x['signal']:<18}"
+                  f"{x['close']:>9}{x['target']:>9}{x['stop']:>9}"
+                  f"{x['target_pct']:>6.1f}%{x['weight']:>6.2f}")
+
+    if args.journal:
+        # journal BOTH sides: funded candidates as candidates, bench for the
+        # learner. Journaling is paper regardless; funding is a human act.
+        to_journal = [x for x in cands
+                      if x["direction"] == ("long" if regime_state == "risk_on"
+                                            else "short")]
+        if to_journal:
+            n = journal_candidates(to_journal, regime_state)
+            print(f"\njournaled {n} new paper trades -> {JOURNAL_FILE}")
+            print("resolve + learn with: python swing_tracker.py")
 
     if args.json:
         with open(os.path.join("logs", "swing_screen.json"), "w", encoding="utf-8") as f:
             json.dump({"ts": datetime.now().isoformat(timespec="seconds"),
                        "regime": regime_state, "nifty": round(nifty, 1),
-                       "ma200": round(ma, 1), "candidates": cands}, f, indent=2)
+                       "ma200": round(ma, 1),
+                       "funded_action": funded_action,
+                       "candidates": cands}, f, indent=2)
         print("written -> logs/swing_screen.json")
     return 0
 
