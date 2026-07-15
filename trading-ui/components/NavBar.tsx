@@ -3,18 +3,14 @@
 import Link from "next/link"
 import { usePathname } from "next/navigation"
 
+// No-API workflow only. Legacy Dhan-token tabs (Signals, Option Chain,
+// Volume, Positions, Intelligence, Config) were removed 2026-07-15.
 const TABS = [
-  { href: "/",             label: "Signals"      },
-  { href: "/allocation",   label: "Allocation"   },
-  { href: "/swing",        label: "Swing"        },
-  { href: "/chain",        label: "Option Chain" },
-  { href: "/volume",       label: "Volume"       },
-  { href: "/positions",    label: "Positions"    },
-  { href: "/accuracy",     label: "Accuracy"     },
-  { href: "/journal",      label: "Journal"      },
-  { href: "/trades",       label: "P&L"          },
-  { href: "/intelligence", label: "Intelligence" },
-  { href: "/config",       label: "Config"       },
+  { href: "/swing",      label: "Swing"      },
+  { href: "/allocation", label: "Allocation" },
+  { href: "/accuracy",   label: "Accuracy"   },
+  { href: "/journal",    label: "Journal"    },
+  { href: "/trades",     label: "P&L"        },
 ]
 
 export default function NavBar() {
@@ -22,7 +18,7 @@ export default function NavBar() {
   return (
     <nav className="navWrap" aria-label="Primary">
       {TABS.map(t => {
-        const active = t.href === "/" ? pathname === "/" : pathname.startsWith(t.href)
+        const active = pathname === t.href || pathname.startsWith(t.href)
         return (
           <Link
             key={t.href}
