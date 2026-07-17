@@ -57,9 +57,16 @@ def _pf(rets: List[float]) -> Optional[float]:
     return round(gw / gl, 3) if gl > 0 else None
 
 
-def _side_stats(rows: List[dict], direction: str) -> Dict:
+def _side_stats(rows: List[dict], direction: str,
+                funded_only: bool = False) -> Dict:
+    """funded_only: restrict to the truly funded population — longs taken
+    under risk_on. Since 2026-07-15 the journal collects BOTH sides in every
+    regime (learner data); bench longs journaled during risk_off must not
+    contaminate the pre-registered health window. Legacy rows without a
+    regime field were funded-era longs -> count them."""
     rets = [float(r["ret_net"]) for r in rows
-            if r.get("status") == "resolved" and r.get("direction") == direction]
+            if r.get("status") == "resolved" and r.get("direction") == direction
+            and (not funded_only or r.get("regime", "risk_on") == "risk_on")]
     recent = rets[-WINDOW:]
     avg_bp = (sum(recent) / len(recent) * 1e4) if recent else 0.0
     base = BACKTEST_BASELINE_BP.get(direction, 0.0)
@@ -79,7 +86,7 @@ def compute_health(journal_rows: List[dict],
                    prev_status: Optional[str] = None) -> Dict:
     """Verdict comes from the FUNDED side (long). Shorts are reported as the
     paper bench only."""
-    long_s = _side_stats(journal_rows, "long")
+    long_s = _side_stats(journal_rows, "long", funded_only=True)
     short_s = _side_stats(journal_rows, "short")
 
     n, pf = long_s["window_n"], long_s["rolling_pf"]

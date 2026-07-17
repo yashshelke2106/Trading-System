@@ -127,6 +127,16 @@ def screen(data: dict, learner: SwingLearner = None, regime_state: str = "risk_o
     return cands
 
 
+def journalable(cands: list, regime_state: str) -> list:
+    """Which candidates enter the paper journal: ALL of them, both directions,
+    every regime. Journaling is paper-only data collection for the learner —
+    funding is a separate decision (the `fundable` flag). Journaling only the
+    regime side starved the journal of longs during risk-off weeks (22/22
+    short rows by 2026-07-15), which read as short bias and left the learner
+    with zero long-side evidence."""
+    return list(cands)
+
+
 def journal_candidates(cands: list, regime_state: str) -> int:
     """Append today's regime-allowed candidates as OPEN paper trades. The
     tracker resolves them later and feeds the learner — win AND loss alike."""
@@ -228,14 +238,14 @@ def main() -> int:
                   f"{x['target_pct']:>6.1f}%{x['weight']:>6.2f}")
 
     if args.journal:
-        # journal BOTH sides: funded candidates as candidates, bench for the
-        # learner. Journaling is paper regardless; funding is a human act.
-        to_journal = [x for x in cands
-                      if x["direction"] == ("long" if regime_state == "risk_on"
-                                            else "short")]
+        # journal BOTH sides, every regime — paper data collection for the
+        # learner. Funding remains a separate decision (fundable flag).
+        to_journal = journalable(cands, regime_state)
         if to_journal:
             n = journal_candidates(to_journal, regime_state)
-            print(f"\njournaled {n} new paper trades -> {JOURNAL_FILE}")
+            print(f"\njournaled {n} new paper trades -> {JOURNAL_FILE} "
+                  f"({sum(1 for x in to_journal if x['direction']=='long')} long / "
+                  f"{sum(1 for x in to_journal if x['direction']=='short')} short)")
             print("resolve + learn with: python swing_tracker.py")
 
     if args.json:
