@@ -650,19 +650,17 @@ async def get_swing():
                  else out["open"]).append(r)
         from core.strategy_health import load_health
         out["health"] = load_health()
-        lf = os.path.join("logs", "swing_learner.json")
-        if os.path.exists(lf):
-            with open(lf, encoding="utf-8") as f:
-                buckets = json.load(f).get("buckets", {})
-            from core.swing_learner import SwingLearner
-            L = SwingLearner()
-            for key, b in sorted(buckets.items()):
-                d, s, reg = key.split("|")
-                out["learner"].append({
-                    "direction": d, "signal": s, "regime": reg,
-                    "n": b["n"], "wins": b["wins"],
-                    "weight": L.weight(d, s, reg),
-                })
+        from core.swing_learner import SwingLearner
+        L = SwingLearner()   # loads + migrates state itself (pooled buckets)
+        for key, b in sorted(L.buckets.items()):
+            d, reg = key.split("|")
+            sig_mix = ", ".join(f"{s}:{sb['n']}" for s, sb
+                                in sorted(b.get("by_signal", {}).items()))
+            out["learner"].append({
+                "direction": d, "signal": sig_mix or "(pooled)", "regime": reg,
+                "n": b["n"], "wins": b["wins"],
+                "weight": L.weight(d, "*", reg),
+            })
         return out
 
     try:

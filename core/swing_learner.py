@@ -4,8 +4,15 @@ framework. Bandit with Wilson-bound shrinkage, DIRECTION-SYMMETRIC by
 construction.
 
 How it learns (honestly):
-  - Every resolved trade (win or loss) updates the posterior of its bucket
-    (direction x signal x regime). Rewards and penalties are symmetric.
+  - Every resolved trade (win or loss) updates the posterior of its bucket.
+    Rewards and penalties are symmetric.
+  - Buckets are CONSOLIDATED at direction x regime (2026-07-16): the three
+    entry signals were proven statistically indistinguishable over 15 years
+    (docs/research/deep_entry_gate.md, paired t=-0.01), so per-signal buckets
+    tripled time-to-significance while encoding a non-difference. Pooling
+    concentrates ~3x more trades per bucket — faster learning WITHOUT
+    lowering the evidence bar. Per-signal counts are still recorded under
+    by_signal for a future re-split if volume ever justifies one.
   - A bucket's rank weight moves away from 1.0 ONLY when its Wilson 95%
     lower/upper bound clears the 50% baseline — i.e. when the evidence is
     strong, not when 7 trades got lucky. Below MIN_N the weight stays 1.0.
@@ -19,8 +26,9 @@ Anti-bias guarantees:
     premium), so long buckets will earn better posteriors over time. That is
     evidence, not bias. Forcing 50/50 long/short would itself be a bias.
 
-State: logs/swing_learner.json (atomic writes). Audit: every update appended
-to logs/swing_learner_log.jsonl.
+State: logs/swing_learner.json (atomic writes; old per-signal state files
+migrate automatically on load). Audit: every update appended to
+logs/swing_learner_log.jsonl.
 """
 
 from __future__ import annotations
@@ -62,9 +70,41 @@ class SwingLearner:
         if os.path.exists(self.state_file):
             try:
                 with open(self.state_file, encoding="utf-8") as f:
-                    self.buckets = json.load(f).get("buckets", {})
+                    raw = json.load(f).get("buckets", {})
             except Exception:
-                self.buckets = {}
+                raw = {}
+            self.buckets = self._migrate(raw)
+
+    @staticmethod
+    def _migrate(raw: Dict) -> Dict:
+        """Fold legacy per-signal keys (direction|signal|regime) into pooled
+        direction|regime buckets, preserving per-signal counts."""
+        out: Dict[str, Dict] = {}
+        for key, b in raw.items():
+            parts = key.split("|")
+            if len(parts) == 2:                      # already pooled
+                out.setdefault(key, {"wins": 0, "losses": 0, "sum_ret": 0.0,
+                                     "n": 0, "by_signal": {}})
+                dst = out[key]
+                for f in ("wins", "losses", "n"):
+                    dst[f] += b.get(f, 0)
+                dst["sum_ret"] += b.get("sum_ret", 0.0)
+                for sig, sb in b.get("by_signal", {}).items():
+                    d = dst["by_signal"].setdefault(sig, {"wins": 0, "losses": 0, "n": 0})
+                    for f in ("wins", "losses", "n"):
+                        d[f] += sb.get(f, 0)
+                continue
+            direction, signal, regime = parts        # legacy 3-part key
+            pooled = f"{direction}|{regime}"
+            dst = out.setdefault(pooled, {"wins": 0, "losses": 0, "sum_ret": 0.0,
+                                          "n": 0, "by_signal": {}})
+            for f in ("wins", "losses", "n"):
+                dst[f] += b.get(f, 0)
+            dst["sum_ret"] += b.get("sum_ret", 0.0)
+            sb = dst["by_signal"].setdefault(signal, {"wins": 0, "losses": 0, "n": 0})
+            for f in ("wins", "losses", "n"):
+                sb[f] += b.get(f, 0)
+        return out
 
     def save(self) -> None:
         os.makedirs(os.path.dirname(self.state_file), exist_ok=True)
@@ -76,29 +116,39 @@ class SwingLearner:
 
     # ── core API ──────────────────────────────────────────────────────────
     @staticmethod
-    def bucket_key(direction: str, signal: str, regime: str) -> str:
-        return f"{direction}|{signal}|{regime}"
+    def bucket_key(direction: str, regime: str) -> str:
+        """Pooled trust bucket. Signal is deliberately NOT part of the key
+        (indistinguishable over 15y — deep_entry_gate.md)."""
+        return f"{direction}|{regime}"
 
     def record(self, direction: str, signal: str, regime: str,
                won: bool, ret_net: float, symbol: str = "",
                ts: Optional[str] = None) -> None:
         """Update from ONE resolved trade — win or loss, long or short,
-        the exact same arithmetic."""
-        key = self.bucket_key(direction, signal, regime)
+        the exact same arithmetic. Pooled bucket + per-signal sub-count."""
+        key = self.bucket_key(direction, regime)
         b = self.buckets.setdefault(key, {"wins": 0, "losses": 0,
-                                          "sum_ret": 0.0, "n": 0})
+                                          "sum_ret": 0.0, "n": 0,
+                                          "by_signal": {}})
         b["wins" if won else "losses"] += 1
         b["n"] += 1
         b["sum_ret"] += float(ret_net)
+        sb = b.setdefault("by_signal", {}).setdefault(
+            signal, {"wins": 0, "losses": 0, "n": 0})
+        sb["wins" if won else "losses"] += 1
+        sb["n"] += 1
         os.makedirs(os.path.dirname(AUDIT_FILE), exist_ok=True)
         with open(AUDIT_FILE, "a", encoding="utf-8") as f:
             f.write(json.dumps({"ts": ts or datetime.now().isoformat(timespec="seconds"),
-                                "bucket": key, "symbol": symbol, "won": won,
+                                "bucket": key, "signal": signal, "symbol": symbol,
+                                "won": won,
                                 "ret_net": round(float(ret_net), 5)}) + "\n")
 
     def weight(self, direction: str, signal: str, regime: str) -> float:
-        """Rank multiplier for a candidate. 1.0 = neutral / not enough data."""
-        b = self.buckets.get(self.bucket_key(direction, signal, regime))
+        """Rank multiplier for a candidate. Signature keeps the signal arg so
+        callers are unchanged, but trust is pooled per direction x regime.
+        1.0 = neutral / not enough data."""
+        b = self.buckets.get(self.bucket_key(direction, regime))
         if not b or b["n"] < MIN_N:
             return 1.0
         lo, hi = _wilson(b["wins"], b["n"])
@@ -113,13 +163,17 @@ class SwingLearner:
     def report(self) -> str:
         rows = []
         for key, b in sorted(self.buckets.items()):
-            d, s, r = key.split("|")
+            d, r = key.split("|")
             lo, hi = _wilson(b["wins"], b["n"])
             avg = b["sum_ret"] / b["n"] * 1e4 if b["n"] else 0.0
-            rows.append(f"  {d:5} | {s:24} | {r:8} | n={b['n']:4} "
+            rows.append(f"  {d:5} | {r:8} | n={b['n']:4} "
                         f"wr={b['wins']/max(b['n'],1)*100:4.1f}% "
                         f"wilson=[{lo*100:.0f},{hi*100:.0f}]% "
-                        f"avg={avg:+6.1f}bp weight={self.weight(d, s, r):.2f}")
-        return ("SwingLearner buckets (weight moves off 1.0 only past "
-                f"n>={MIN_N} + Wilson clears 50%):\n" + "\n".join(rows)
+                        f"avg={avg:+6.1f}bp weight={self.weight(d, '*', r):.2f}")
+            for sig, sb in sorted(b.get("by_signal", {}).items()):
+                rows.append(f"          - {sig:<22} n={sb['n']:3} "
+                            f"wr={sb['wins']/max(sb['n'],1)*100:4.1f}%")
+        return ("SwingLearner buckets (pooled direction x regime; weight moves "
+                f"off 1.0 only past n>={MIN_N} + Wilson clears 50%):\n"
+                + "\n".join(rows)
                 if rows else "SwingLearner: no resolved trades yet.")
