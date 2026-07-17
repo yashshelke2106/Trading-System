@@ -33,6 +33,54 @@ MAX_HOLD = 10
 COST = {"long": 0.0025, "short": 0.0010}
 
 
+def first15_confirms(direction: str, o15: float, c15: float) -> bool:
+    """First 15m candle of entry day closes in the trade's direction."""
+    return c15 > o15 if direction == "long" else c15 < o15
+
+
+def annotate_confirmations(rows: list, intraday: dict = None) -> int:
+    """Stamp first-15m-candle data (first15_open/close, confirm_15m) onto
+    journal rows that lack it. FORWARD EVIDENCE COLLECTION ONLY — feeds the
+    pre-registered intraday-confirmation hypothesis
+    (docs/research/intraday_confirm_hypothesis.md); changes no entry logic.
+    yfinance serves 15m bars ~60 days back, and rows are annotated within
+    days of entry, so the window is always sufficient.
+    intraday: optional {sym: DataFrame} injection for tests."""
+    todo = [r for r in rows if "confirm_15m" not in r and r.get("signal_date")]
+    if not todo:
+        return 0
+    if intraday is None:
+        import yfinance as yf
+        syms = sorted({r["symbol"] for r in todo})
+        tickers = {s: YMAP.get(s, s) + ".NS" for s in syms}
+        raw = yf.download(list(tickers.values()), period="1mo", interval="15m",
+                          group_by="ticker", threads=True, progress=False)
+        intraday = {}
+        for s, tk in tickers.items():
+            try:
+                d = raw[tk].dropna()
+                if len(d):
+                    intraday[s] = d.rename(columns=str.lower)
+            except Exception:
+                pass
+    n = 0
+    for r in todo:
+        bars = intraday.get(r["symbol"])
+        if bars is None or not len(bars):
+            continue
+        sig_d = pd.Timestamp(r["signal_date"]).date()
+        days = sorted({ts.date() for ts in bars.index if ts.date() > sig_d})
+        if not days:
+            continue                       # entry day not in window yet
+        first = bars[[ts.date() == days[0] for ts in bars.index]].iloc[0]
+        o15, c15 = float(first["open"]), float(first["close"])
+        r["first15_open"] = round(o15, 2)
+        r["first15_close"] = round(c15, 2)
+        r["confirm_15m"] = first15_confirms(r["direction"], o15, c15)
+        n += 1
+    return n
+
+
 def _load_journal() -> list:
     if not os.path.exists(JOURNAL_FILE):
         return []
@@ -142,6 +190,14 @@ def main() -> int:
               f"net={res['ret_net']*100:+.2f}%")
     learner.save()
 
+    try:
+        n_ann = annotate_confirmations(rows)
+        if n_ann:
+            print(f"annotated first-15m confirmation on {n_ann} rows "
+                  f"(hypothesis data, changes nothing)")
+    except Exception as e:
+        print(f"confirmation annotation skipped: {e}")
+
     tmp = JOURNAL_FILE + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         for r in rows:
@@ -162,6 +218,17 @@ def main() -> int:
     if args.report:
         print()
         print(SwingLearner().report())
+        ann = [r for r in rows if r.get("status") == "resolved"
+               and "confirm_15m" in r]
+        if ann:
+            print(f"\n15m-confirmation hypothesis ({len(ann)} resolved+annotated; "
+                  "pre-registered, decides at n>=150):")
+            for cf in (True, False):
+                g = [float(r["ret_net"]) for r in ann if r["confirm_15m"] is cf]
+                if g:
+                    wr = sum(1 for x in g if x > 0) / len(g) * 100
+                    print(f"  confirm={str(cf):5} n={len(g):4} win%={wr:4.1f} "
+                          f"avg={sum(g)/len(g)*1e4:+7.1f}bp")
     return 0
 
 
