@@ -46,6 +46,9 @@ _TIMEOUT = 15
 # indianapi.in period tokens accepted by /historical_data
 VALID_PERIODS = {"1m", "6m", "1yr", "3yr", "5yr", "10yr", "max"}
 
+# (timestamp, raw_feed) - market-wide /news cache shared across instances
+_NEWS_FEED_CACHE = (0.0, None)
+
 
 class IndianStockAPI:
     def __init__(self, api_key: Optional[str] = None):
@@ -133,12 +136,23 @@ class IndianStockAPI:
 
     def get_news(self, symbol: Optional[str] = None) -> List[Dict]:
         """Normalized news -> list of {title, date, url, summary}. If `symbol`
-        given, filter titles containing it (API /news is market-wide)."""
-        try:
-            raw = self.raw_news()
-        except Exception as e:
-            log.warning("indianapi news failed: %s", e)
-            return []
+        given, filter titles containing it (API /news is market-wide).
+
+        Feed is cached module-wide for 10 min: /news is one market-wide feed,
+        and bulk callers (news_reaction.collect over 150+ symbols) would
+        otherwise re-fetch the identical payload per symbol."""
+        global _NEWS_FEED_CACHE
+        import time as _time
+        ts, cached = _NEWS_FEED_CACHE
+        if cached is not None and _time.time() - ts < 600:
+            raw = cached
+        else:
+            try:
+                raw = self.raw_news()
+                _NEWS_FEED_CACHE = (_time.time(), raw)
+            except Exception as e:
+                log.warning("indianapi news failed: %s", e)
+                return []
         items = _parse_news(raw)
         if symbol:
             s = symbol.upper()
