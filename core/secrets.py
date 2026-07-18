@@ -282,6 +282,53 @@ def clear_data_credentials() -> None:
         pass
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# indianapi.in — REST stock-data API (stock.indianapi.in), single API key
+# Auth: header `X-Api-Key: <key>`. Permanent credential (no rotation).
+# ─────────────────────────────────────────────────────────────────────────────
+
+_KEY_INDIANAPI = "indianapi_key"
+INDIANAPI_KEY_FILE = os.path.join(_PROJECT_ROOT, ".indianapi_key")
+
+
+def get_indianapi_key() -> str:
+    """indianapi.in API key. Keyring → .indianapi_key file → env fallback."""
+    k = _kr_get(_KEY_INDIANAPI)
+    if k:
+        return k
+    if os.path.exists(INDIANAPI_KEY_FILE):
+        try:
+            val = open(INDIANAPI_KEY_FILE).read().strip()
+            if val:
+                _kr_set(_KEY_INDIANAPI, val)  # migrate to keyring
+                return val
+        except Exception:
+            pass
+    return os.getenv("INDIANAPI_KEY", "").strip()
+
+
+def save_indianapi_key(key: str) -> None:
+    """Persist indianapi.in key to keyring + .indianapi_key file."""
+    key = key.strip()
+    if not key:
+        raise ValueError("indianapi key cannot be empty")
+    _kr_set(_KEY_INDIANAPI, key)
+    try:
+        with open(INDIANAPI_KEY_FILE, "w") as f:
+            f.write(key)
+    except Exception:
+        pass
+
+
+def clear_indianapi_key() -> None:
+    _kr_del(_KEY_INDIANAPI)
+    try:
+        if os.path.exists(INDIANAPI_KEY_FILE):
+            os.remove(INDIANAPI_KEY_FILE)
+    except Exception:
+        pass
+
+
 def get_data_token() -> str:
     """Resolve token for Dhan Data API session.
     Priority: Data API JWT → trading access token (fallback).

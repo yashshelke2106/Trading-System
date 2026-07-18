@@ -45,3 +45,11 @@ trading-ui/.git.disabled/
 brain/.obsidian/
 # generated backtest output (harness recreates on run)
 backtest_live_pipeline_trades.csv
+
+# indianapi.in key
+.indianapi_key
+
+# bulk history archive (large, regenerable)
+data/history/
+data/events/
+logs/corporate_events.jsonl
