@@ -107,6 +107,26 @@ def write_signals(signals: list, meta: dict = None) -> None:
     except Exception:
         pass
 
+    # ── agentic layer (both strictly risk-reducing; never block the write) ──
+    # LLM review: CONCUR/VETO/ABSTAIN annotation only (opt-in via
+    # AGENT_SIGNAL_REVIEW=1). Cannot alter trade parameters.
+    try:
+        from core.agent_signal_review import review_signals
+        signals = review_signals(signals)
+    except Exception:
+        pass
+    # Sentinel: halt-only flag from the risk-sentinel agent. Marks new signals
+    # blocked; deterministic pipeline output otherwise untouched.
+    try:
+        from core.sentinel import entries_halted
+        halted, why = entries_halted()
+        if halted:
+            for s in signals:
+                s["sentinel_halt"] = True
+                s["sentinel_reason"] = why
+    except Exception:
+        pass
+
     all_signals = _merge_with_existing(signals)
     cooldown = getattr(_merge_with_existing, "_last_cooldown", {})
 

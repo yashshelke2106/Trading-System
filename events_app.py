@@ -97,6 +97,16 @@ with tab_trades:
         "paper-bench only, never funded. Selection quality is what the forward "
         "paper journal is measuring."
     )
+    # sentinel banner - agentic halt flag (halt-only power, fail-safe reader)
+    try:
+        from core.sentinel import entries_halted
+        _h, _why = entries_halted()
+        if _h:
+            st.error(f"🛑 RISK SENTINEL: new entries HALTED - {_why}  "
+                     f"(clear: `python -m scripts.agent_risk_sentinel --clear`)")
+    except Exception:
+        pass
+
     flagged_syms = {sym for _, sym, _ in flagged}
     if os.path.exists(SIGNALS):
         sig_data = json.load(open(SIGNALS, encoding="utf-8"))
@@ -107,7 +117,9 @@ with tab_trades:
             df = pd.DataFrame(sigs)
             cols = [c for c in ("symbol", "direction", "confluence_grade",
                                 "entry_price", "sl_price", "target_price",
-                                "rr_ratio", "confluence_score", "reason")
+                                "rr_ratio", "confluence_score",
+                                "agent_verdict", "agent_reason",
+                                "sentinel_halt", "reason")
                     if c in df.columns]
             df = df[cols]
             df["event_risk"] = df["symbol"].map(
