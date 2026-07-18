@@ -115,7 +115,7 @@ BRIEF:
 def run_llm(brief: str) -> dict:
     """Headless claude call. Returns parsed JSON or raises."""
     result = subprocess.run(
-        ["claude", "-p", _PROMPT + brief, "--output-format", "text"],
+        ["claude", "--model", os.getenv("CLAUDE_AGENT_MODEL", "claude-haiku-4-5-20251001"), "-p", _PROMPT + brief, "--output-format", "text"],
         capture_output=True, text=True, timeout=_TIMEOUT_S,
         encoding="utf-8", errors="replace",
     )

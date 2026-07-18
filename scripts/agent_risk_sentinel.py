@@ -115,7 +115,7 @@ INPUTS:
 
 def run_llm(inputs: dict) -> dict:
     result = subprocess.run(
-        ["claude", "-p", _PROMPT + json.dumps(inputs, indent=1, default=str),
+        ["claude", "--model", os.getenv("CLAUDE_AGENT_MODEL", "claude-haiku-4-5-20251001"), "-p", _PROMPT + json.dumps(inputs, indent=1, default=str),
          "--output-format", "text"],
         capture_output=True, text=True, timeout=_TIMEOUT_S,
         encoding="utf-8", errors="replace",

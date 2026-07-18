@@ -91,7 +91,7 @@ def _call_llm(signals: List[Dict]) -> Dict[str, Dict]:
             for s in signals]
     prompt = _PROMPT % (_context_for(signals), json.dumps(slim, indent=1))
     result = subprocess.run(
-        ["claude", "-p", prompt, "--output-format", "text"],
+        ["claude", "--model", os.getenv("CLAUDE_AGENT_MODEL", "claude-haiku-4-5-20251001"), "-p", prompt, "--output-format", "text"],
         capture_output=True, text=True, timeout=_TIMEOUT_S,
         encoding="utf-8", errors="replace",
     )
