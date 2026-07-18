@@ -96,7 +96,7 @@ def _call_llm(signals: List[Dict]) -> Dict[str, Dict]:
         encoding="utf-8", errors="replace",
     )
     if result.returncode != 0:
-        raise RuntimeError(f"claude CLI rc={result.returncode}: {result.stderr[:200]}")
+        raise RuntimeError(f"claude CLI rc={result.returncode}: {result.stderr.strip()[-600:]}")
     text = result.stdout.strip()
     if "```" in text:
         text = text.split("```")[1].lstrip("json").strip()

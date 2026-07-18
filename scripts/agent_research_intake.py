@@ -120,7 +120,7 @@ def run_llm(brief: str) -> dict:
         encoding="utf-8", errors="replace",
     )
     if result.returncode != 0:
-        raise RuntimeError(f"claude CLI failed: {result.stderr[:300]}")
+        raise RuntimeError(f"claude CLI failed: {result.stderr.strip()[-600:]}")
     text = result.stdout.strip()
     # tolerate fenced output
     if "```" in text:
