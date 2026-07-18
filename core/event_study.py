@@ -173,17 +173,26 @@ def _baseline(symbol: str, df: pd.DataFrame, index_df: pd.DataFrame) -> Dict[int
 
 
 def _load_events() -> List[Dict]:
+    """Load events deduped on (symbol, date, event_type) - the raw archive
+    carries ~8% duplicates (same action reported via multiple table rows),
+    which would inflate n and fake precision (caught by leakage_audit)."""
     if not os.path.exists(EVENTS_JSONL):
         return []
-    out = []
+    out, seen = [], set()
     with open(EVENTS_JSONL, "r", encoding="utf-8") as f:
         for line in f:
             line = line.strip()
-            if line:
-                try:
-                    out.append(json.loads(line))
-                except Exception:
-                    continue
+            if not line:
+                continue
+            try:
+                r = json.loads(line)
+            except Exception:
+                continue
+            key = (r.get("symbol"), r.get("date"), r.get("event_type"))
+            if r.get("date") and key in seen:
+                continue
+            seen.add(key)
+            out.append(r)
     return out
 
 

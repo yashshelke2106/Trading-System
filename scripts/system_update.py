@@ -82,41 +82,46 @@ def main(argv) -> int:
     age = _price_archive_age_days()
     from scripts.build_history_archive import build as build_prices
     if args.fast:
-        print(f"[1/6] price archive: skipped (--fast; {age:.0f}d stale)")
+        print(f"[1/7] price archive: skipped (--fast; {age:.0f}d stale)")
     elif age > PRICE_STALE_DAYS:
-        print(f"[1/6] price archive: {age:.0f}d stale -> refreshing all...")
+        print(f"[1/7] price archive: {age:.0f}d stale -> refreshing all...")
         build_prices(list(FO_UNIVERSE), "10yr", sleep=0.2,
                      refresh=True, probe=False, source="yfinance")
     else:
-        print(f"[1/6] price archive: fresh ({age:.0f}d) - top-up only")
+        print(f"[1/7] price archive: fresh ({age:.0f}d) - top-up only")
         build_prices(list(FO_UNIVERSE), "10yr", sleep=0.2,
                      refresh=False, probe=False, source="yfinance")
 
     # 2. events archive
     eage = _events_age_days()
     if args.force_events or eage > EVENTS_STALE_DAYS:
-        print(f"[2/6] events archive: {eage:.1f}d old -> refreshing...")
+        print(f"[2/7] events archive: {eage:.1f}d old -> refreshing...")
         from scripts.build_events_archive import build as build_events
         build_events(list(FO_UNIVERSE), sleep=1.5, refresh=True, probe=False)
     else:
-        print(f"[2/6] events archive: fresh ({eage:.1f}d) - skipped")
+        print(f"[2/7] events archive: fresh ({eage:.1f}d) - skipped")
 
     # 3. news snapshot
     n = nr.snapshot_news()
-    print(f"[3/6] news snapshot: +{n} article(s)")
+    print(f"[3/7] news snapshot: +{n} article(s)")
 
     # 4. typed reaction collect (feed cached -> 1 HTTP call)
     c = nr.collect(list(FO_UNIVERSE))
-    print(f"[4/6] reaction collect: +{c} event(s)")
+    print(f"[4/7] reaction collect: +{c} event(s)")
 
     # 5. analyze forward returns
-    print("[5/6] reaction analyze:")
+    print("[5/7] reaction analyze:")
     nr.analyze()
 
     # 6. refresh study results for the dashboard
-    print("[6/6] event study (refreshing results json):")
+    print("[6/7] event study (refreshing results json):")
     from core.event_study import run as study_run
     study_run(min_n=20)
+
+    # 7. tracking error: live paper vs backtest expectation (drift = kill signal)
+    print("[7/7] tracking error:")
+    from core.tracking_error import run as te_run
+    te_run()
 
     print("\nsystem update done.")
     return 0

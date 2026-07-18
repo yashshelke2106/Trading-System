@@ -21,8 +21,11 @@ RUN:  python -m core.event_stat_gate --types bonus,buyback --horizons 5,20
 from __future__ import annotations
 
 import argparse
+import json
+import os
 import random
 from collections import defaultdict
+from datetime import datetime
 from typing import Dict, List
 
 from .event_study import (
@@ -33,9 +36,55 @@ from .event_study import (
 COST_PCT = 0.10   # round-trip hurdle (~futures 0.06, cash ~0.2; 0.10 = middle)
 _BOOT = 5000
 
+# One-shot holdout: last HOLDOUT_FRAC of events (by event date) are NEVER seen
+# by the discovery gate. A cell that passes discovery gets exactly ONE holdout
+# test, recorded in the ledger; any later attempt on the same cell is refused.
+HOLDOUT_FRAC = 0.20
+_ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+HOLDOUT_LEDGER = os.path.join(_ROOT_DIR, "logs", "holdout_ledger.jsonl")
 
-def _abnormals_by_symbol(only_types: List[str], horizons: List[int]) -> Dict:
-    """{event_type: {horizon: {symbol: [abnormal_ret, ...]}}}"""
+
+def _holdout_spent() -> Dict:
+    """{(event_type, horizon): verdict} for cells that already consumed their
+    single holdout shot. Re-testing a spent cell is refused - no retries."""
+    spent = {}
+    if os.path.exists(HOLDOUT_LEDGER):
+        with open(HOLDOUT_LEDGER, "r", encoding="utf-8") as f:
+            for line in f:
+                try:
+                    r = json.loads(line)
+                    spent[(r["event_type"], r["horizon"])] = r["verdict"]
+                except Exception:
+                    continue
+    return spent
+
+
+def _holdout_record(event_type: str, horizon: int, verdict: str, detail: str) -> None:
+    os.makedirs(os.path.dirname(HOLDOUT_LEDGER), exist_ok=True)
+    with open(HOLDOUT_LEDGER, "a", encoding="utf-8") as f:
+        f.write(json.dumps({
+            "ts": datetime.now().isoformat(timespec="seconds"),
+            "event_type": event_type, "horizon": horizon,
+            "verdict": verdict, "detail": detail}) + "\n")
+
+
+def _holdout_cutoff(only_types: List[str]):
+    """Date splitting events 80/20: events strictly after it are holdout."""
+    dates = sorted(
+        d for ev in _load_events()
+        if (ev.get("event_type") or ev.get("category")) in only_types
+        and (d := _parse_date(ev.get("date"))) is not None
+    )
+    if not dates:
+        return None
+    return dates[int(len(dates) * (1 - HOLDOUT_FRAC)) - 1]
+
+
+def _abnormals_by_symbol(only_types: List[str], horizons: List[int],
+                         segment: str = "discovery", cutoff=None) -> Dict:
+    """{event_type: {horizon: {symbol: [abnormal_ret, ...]}}}
+    segment: 'discovery' (events <= cutoff), 'holdout' (> cutoff),
+             'all' (no split)."""
     events = _load_events()
     index_df = _load_ohlc(_INDEX_TICKER)
     out: Dict[str, Dict[int, Dict[str, List[float]]]] = defaultdict(
@@ -48,6 +97,11 @@ def _abnormals_by_symbol(only_types: List[str], horizons: List[int]) -> Dict:
         d = _parse_date(ev.get("date"))
         if not d:
             continue
+        if cutoff is not None:
+            if segment == "discovery" and d > cutoff:
+                continue
+            if segment == "holdout" and d <= cutoff:
+                continue
         sym = ev.get("symbol")
         df = _load_ohlc(sym)
         if df.empty:
@@ -94,14 +148,27 @@ def _clustered_bootstrap(by_sym: Dict[str, List[float]]):
 
 
 def run(only_types: List[str], horizons: List[int]) -> None:
-    data = _abnormals_by_symbol(only_types, horizons)
+    cutoff = _holdout_cutoff(only_types)
+    data = _abnormals_by_symbol(only_types, horizons, "discovery", cutoff)
+    spent = _holdout_spent()
+
+    # alpha budget: Bonferroni across today's cells AND every hypothesis ever
+    # registered (registry seeds with the project's 10 pre-registry hunts).
     n_cells = sum(len(horizons) for _ in only_types)
-    alpha = 0.05 / max(n_cells, 1)   # Bonferroni
+    try:
+        from .hypothesis_registry import trial_count
+        n_trials = trial_count()
+    except Exception:
+        n_trials = 0
+    denom = max(n_cells + n_trials, 1)
+    alpha = 0.05 / denom
 
     print("=" * 82)
-    print("STATISTICIAN GATE  (abnormal returns; clustered bootstrap by symbol)")
-    print(f"cost hurdle |mean| > {COST_PCT:.2f}%   Bonferroni alpha = 0.05/{n_cells} "
-          f"= {alpha:.4f}")
+    print("STATISTICIAN GATE  (discovery segment; clustered bootstrap by symbol)")
+    print(f"holdout: last {HOLDOUT_FRAC:.0%} of events (after {cutoff}) reserved, "
+          f"one shot per cell")
+    print(f"cost hurdle |mean| > {COST_PCT:.2f}%   alpha = 0.05/({n_cells} cells "
+          f"+ {n_trials} registered trials) = {alpha:.5f}")
     print("=" * 82)
     print(f"  {'type':12s} {'h':>3s} {'n_ev':>5s} {'n_sym':>5s} {'mean%':>7s} "
           f"{'95% CI':>17s} {'p':>7s}   verdict")
@@ -117,20 +184,38 @@ def run(only_types: List[str], horizons: List[int]) -> None:
                 continue
             ci_excl_0 = (lo > 0) or (hi < 0)
             passes = ci_excl_0 and (p < alpha) and (abs(mean) > COST_PCT)
-            any_pass = any_pass or passes
-            verdict = "PASS" if passes else (
+            verdict = "PASS-disc" if passes else (
                 "cost" if ci_excl_0 and p < alpha else
                 "n.s.")
             print(f"  {et:12s} {n:3d} {n_ev:5d} {n_sym:5d} {mean:+7.2f} "
                   f"[{lo:+6.2f},{hi:+6.2f}] {p:7.4f}   {verdict}")
 
+            # ── one-shot holdout, only for discovery passes ────────────────
+            if passes:
+                if (et, n) in spent:
+                    print(f"  {'':12s}      holdout ALREADY SPENT for this cell "
+                          f"({spent[(et, n)]}) - no retry, verdict stands")
+                    continue
+                h_data = _abnormals_by_symbol([et], [n], "holdout", cutoff)
+                h_sym = h_data.get(et, {}).get(n, {})
+                hm, hlo, hhi, hp, hn, _ = _clustered_bootstrap(h_sym)
+                same_sign = (hm > 0) == (mean > 0)
+                h_ok = hn >= 10 and same_sign and ((hlo > 0) or (hhi < 0))
+                h_verdict = "CONFIRMED" if h_ok else "FAILED"
+                _holdout_record(et, n, h_verdict,
+                                f"disc_mean={mean:.2f} hold_mean={hm:.2f} "
+                                f"hold_n={hn} hold_p={hp:.4f}")
+                any_pass = any_pass or h_ok
+                print(f"  {'':12s}      HOLDOUT (one shot, now spent): "
+                      f"mean {hm:+.2f} [{hlo:+.2f},{hhi:+.2f}] n={hn} "
+                      f"-> {h_verdict}")
+
     print("  " + "-" * 78)
-    print("  verdict: PASS = CI excludes 0 AND p<Bonferroni AND |mean|>cost")
-    print("           cost = significant but below cost hurdle (untradeable)")
-    print("           n.s. = not significant after clustering + multiple testing")
+    print("  PASS-disc = passed discovery; only holdout CONFIRMED is tradeable")
+    print("  cost = significant but below cost hurdle | n.s. = not significant")
     if not any_pass:
-        print("\n  RESULT: nothing passes. No tradeable event edge - as expected for")
-        print("  an efficient large-cap universe. Do not trade these.")
+        print("\n  RESULT: nothing holdout-confirmed. No tradeable event edge -")
+        print("  as expected for an efficient large-cap universe. Do not trade.")
     print()
 
 
