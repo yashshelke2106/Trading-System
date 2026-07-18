@@ -29,10 +29,52 @@ class EventAlert:
     confidence: float
 
 
+def _load_exact_events() -> Dict[str, List[Tuple[date, str]]]:
+    """Load exact-dated corporate events (results/board meetings/dividends...)
+    from logs/corporate_events.jsonl (built by scripts/build_events_archive.py).
+    Returns {symbol: [(event_date, event_type), ...]} for FUTURE dates only.
+    Empty dict if the archive doesn't exist — callers degrade to the fuzzy
+    results-season windows below."""
+    import json as _json
+    import os as _os
+    path = _os.path.join(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))),
+                         "logs", "corporate_events.jsonl")
+    out: Dict[str, List[Tuple[date, str]]] = {}
+    if not _os.path.exists(path):
+        return out
+    today = date.today()
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            for line in f:
+                try:
+                    r = _json.loads(line)
+                except Exception:
+                    continue
+                d = r.get("date")
+                if not d:
+                    continue
+                try:
+                    ev_date = datetime.strptime(d[:10], "%Y-%m-%d").date()
+                except ValueError:
+                    continue
+                if ev_date < today:
+                    continue
+                out.setdefault(r.get("symbol", ""), []).append(
+                    (ev_date, r.get("event_type", "unknown")))
+    except Exception:
+        return {}
+    for sym in out:
+        out[sym].sort()
+    return out
+
+
 class EventCalendar:
     def __init__(self):
         self.events: List[EventAlert] = []
         self.fno_expiry_dates = self._get_fno_expiry_dates()
+        # Exact per-symbol event dates from the corporate-events archive.
+        # Strictly better than the fuzzy RESULTS_SEASONS windows when present.
+        self.exact_events = _load_exact_events()
 
     def _get_fno_expiry_dates(self) -> List[datetime]:
         try:
@@ -80,14 +122,41 @@ class EventCalendar:
                 return True, quarter
         return False, ""
 
+    def next_exact_event(self, symbol: str) -> Tuple[Optional[int], str]:
+        """(days_until, event_type) for the symbol's next dated corporate event
+        from the archive. (None, '') if archive missing or no future event."""
+        evs = self.exact_events.get(symbol.upper(), [])
+        if not evs:
+            return None, ""
+        ev_date, ev_type = evs[0]
+        return (ev_date - date.today()).days, ev_type
+
+    # Event types that carry overnight gap risk (results/board meeting on
+    # results agenda). Dividends/bonus are mechanical, not gap events.
+    GAP_RISK_EVENTS = {"results", "board_meeting", "results_beat", "results_miss"}
+
     def get_event_context(self, symbol: str) -> Dict:
         in_results, quarter = self.is_results_season()
         auto_catalyst = symbol in self.AUTO_SALES_SYMBOLS and self.is_auto_sales_week()
+
+        # Exact-date layer: known upcoming event for THIS symbol beats the
+        # market-wide fuzzy season window.
+        days_to_event, event_type = self.next_exact_event(symbol)
+        gap_event_soon = (
+            days_to_event is not None
+            and days_to_event <= 2
+            and event_type in self.GAP_RISK_EVENTS
+        )
         return {
             'auto_sales_week': auto_catalyst,
             'results_season': in_results,
             'results_quarter': quarter,
-            'tighten_stop': in_results,          # gap risk during results
+            # exact-date fields (None/'' when archive absent — fuzzy fallback rules)
+            'days_to_event': days_to_event,
+            'event_type': event_type,
+            'gap_event_soon': gap_event_soon,     # results/board mtg within 2d
+            'skip_entry': gap_event_soon,         # don't open into a known gap
+            'tighten_stop': gap_event_soon or in_results,
             'boost_auto_confidence': auto_catalyst,
         }
 
