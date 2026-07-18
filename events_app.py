@@ -21,6 +21,7 @@ _ROOT = os.path.dirname(os.path.abspath(__file__))
 NEWS_ARCHIVE = os.path.join(_ROOT, "logs", "news_archive.jsonl")
 REACTION_LOG = os.path.join(_ROOT, "logs", "news_reaction.jsonl")
 STUDY_RESULTS = os.path.join(_ROOT, "logs", "event_study_results.json")
+SIGNALS = os.path.join(_ROOT, "logs", "signals.json")
 
 st.set_page_config(page_title="Event Dashboard", page_icon="📅", layout="wide")
 
@@ -83,8 +84,53 @@ c2.metric("Events next 30d", len(upcoming))
 c3.metric("News archived", len(news))
 c4.metric("Reaction events (ripe)", f"{len(rx)} ({ripe})")
 
-tab_flags, tab_cal, tab_study, tab_news, tab_rx = st.tabs(
-    ["🚫 Risk Flags", "🗓 Calendar", "📊 Study", "📰 News", "🎯 Reactions"])
+tab_trades, tab_flags, tab_cal, tab_study, tab_news, tab_rx = st.tabs(
+    ["💼 Trades", "🚫 Risk Flags", "🗓 Calendar", "📊 Study", "📰 News",
+     "🎯 Reactions"])
+
+# ── trades (scanner signals x event risk flags) ───────────────────────────
+with tab_trades:
+    st.subheader("Scanner signals + event risk overlay")
+    st.warning(
+        "**PAPER ONLY.** Audit 2026-06-08: this strategy's backtest is PF 0.72 "
+        "(net-negative) — no validated edge behind these picks. Shorts are "
+        "paper-bench only, never funded. Selection quality is what the forward "
+        "paper journal is measuring."
+    )
+    flagged_syms = {sym for _, sym, _ in flagged}
+    if os.path.exists(SIGNALS):
+        sig_data = json.load(open(SIGNALS, encoding="utf-8"))
+        sigs = sig_data.get("signals", [])
+        scan_ts = sig_data.get("ts", "?")[:16]
+        st.caption(f"last scan: {scan_ts} · grades: {sig_data.get('by_grade')}")
+        if sigs:
+            df = pd.DataFrame(sigs)
+            cols = [c for c in ("symbol", "direction", "confluence_grade",
+                                "entry_price", "sl_price", "target_price",
+                                "rr_ratio", "confluence_score", "reason")
+                    if c in df.columns]
+            df = df[cols]
+            df["event_risk"] = df["symbol"].map(
+                lambda s: "SKIP - results <=2d" if s in flagged_syms else "clear")
+            # event-blocked rows sort first so the danger is seen before the trades
+            df = df.sort_values(["event_risk", "confluence_grade"])
+            st.dataframe(df, use_container_width=True, hide_index=True)
+            blocked = int((df["event_risk"] != "clear").sum())
+            if blocked:
+                st.error(f"{blocked} signal(s) blocked by event risk - known "
+                         "results gap within 2 days. Do not take these.")
+        else:
+            st.info(
+                "Scanner found **0 qualifying setups** in the last run - that is "
+                "normal, it needs 3+ pattern votes with a 2-vote lead. "
+                "An empty day is the filter working, not a bug.\n\n"
+                "Refresh signals: run the scanner "
+                "(`start_trading.bat`, or `python scan_only_v2.py`), then reload "
+                "this page. Full terminal with option legs: http://localhost:3000"
+            )
+    else:
+        st.info("No logs/signals.json yet - run the scanner first "
+                "(`start_trading.bat` or `python scan_only_v2.py`).")
 
 # ── risk flags ────────────────────────────────────────────────────────────
 with tab_flags:
