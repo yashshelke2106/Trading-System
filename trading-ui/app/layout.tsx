@@ -17,14 +17,16 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <body className="min-h-full flex flex-col">
         {/* ── Sticky shell: brand + primary nav ── */}
         <header className="appShell">
+          {/* Groww-style header: brand + SECTIONS on one row, the active
+              section's sub-nav on the row beneath. */}
           <div className="appBar">
             <div className="brand">
               <span className="brandMark" aria-hidden />
               <span className="appName">F&amp;O Signal Terminal</span>
               <span className="appTag">NSE · India</span>
             </div>
+            <SectionNav />
           </div>
-          <SectionNav />
           <NavBar />
         </header>
 

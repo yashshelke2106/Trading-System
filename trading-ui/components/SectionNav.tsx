@@ -68,7 +68,7 @@ export default function SectionNav() {
   const active = sectionFor(pathname)
 
   return (
-    <div className="sectionWrap" role="navigation" aria-label="Sections">
+    <div className="sectionNav" role="navigation" aria-label="Sections">
       {SECTIONS.map(s => {
         const on = s.id === active.id
         return (
