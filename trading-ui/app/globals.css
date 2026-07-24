@@ -298,3 +298,35 @@ table.t tbody tr:hover { background: var(--c2); }
   .appBar, .navWrap, .container { padding-left: 14px; padding-right: 14px; }
   .sPrices, .sOptGrid { grid-template-columns: repeat(2,1fr); }
 }
+
+/* ============================================================
+   SECTIONS — Groww-style top-level switcher
+   Two sections (Swing / Live API) sit ABOVE the sub-nav. Picking one
+   swaps the entire tab strip below, so the credential-dependent half of
+   the app is never mixed into the half that works offline.
+   ============================================================ */
+.sectionWrap {
+  max-width: 1680px; margin: 0 auto;
+  display: flex; gap: 6px; padding: 6px 22px 0;
+  overflow-x: auto;
+}
+.sectionTab {
+  display: flex; flex-direction: column; gap: 1px;
+  padding: 8px 18px 9px; border-radius: 10px 10px 0 0;
+  border: 1px solid transparent; border-bottom: none;
+  color: var(--txd); white-space: nowrap;
+  transition: background .16s var(--ease), color .16s var(--ease), border-color .16s var(--ease);
+}
+.sectionTab:hover { color: var(--tx); background: var(--c2); }
+.sectionTab.active {
+  color: var(--tx); background: var(--c1);
+  border-color: var(--bd);
+}
+.sectionLabel {
+  font-size: 14px; font-weight: 700; letter-spacing: .02em;
+}
+.sectionBlurb {
+  font-size: 9.5px; text-transform: uppercase; letter-spacing: .1em;
+  color: var(--txs);
+}
+.sectionTab.active .sectionBlurb { color: var(--txd); }

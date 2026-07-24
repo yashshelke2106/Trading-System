@@ -3,6 +3,7 @@ import "./globals.css"
 import IndexBar from "@/components/IndexBar"
 import MarketStatusBar from "@/components/MarketStatus"
 import NavBar from "@/components/NavBar"
+import SectionNav from "@/components/SectionNav"
 import VersionStamp from "@/components/VersionStamp"
 
 export const metadata: Metadata = {
@@ -23,6 +24,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               <span className="appTag">NSE · India</span>
             </div>
           </div>
+          <SectionNav />
           <NavBar />
         </header>
 
