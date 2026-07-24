@@ -625,6 +625,108 @@ async def get_allocation(refresh: bool = False):
                 "alert": None, "error": str(e)}
 
 
+# ── Strategy verdict (the "is it good or does it need upgrade" answer) ──────
+
+@app.get("/api/verdict")
+async def get_verdict():
+    """Aggregated strategy verdict from the honest sources of record.
+
+    Rules are transparent and computed here, not styled client-side:
+    a strategy is GOOD only if the honest journal PF > 1 net of the
+    exclusions honest_performance applies, or the hypothesis registry
+    holds a non-rejected verdict for it. Everything else is evidence
+    AGAINST upgrade-by-tinkering — the registry exists precisely to stop
+    re-proposing rejected hunts with new parameters.
+    """
+    def _load():
+        out: Dict[str, Any] = {}
+
+        # 1. Honest journal performance (all recorded signals, clean subset).
+        try:
+            from core.honest_performance import from_journal
+            p = from_journal()
+            perf = vars(p) if hasattr(p, "__dict__") else dict(p)
+            out["journal_perf"] = perf
+        except Exception as e:
+            out["journal_perf"] = {"error": str(e)}
+
+        # 2. Hypothesis registry — every hunt and its verdict.
+        try:
+            from core.hypothesis_registry import status as hyp_status
+            out["hypotheses"] = hyp_status()
+        except Exception as e:
+            out["hypotheses"] = [{"error": str(e)}]
+
+        # 3. Swing strategy health (decay monitor) + the standing decision.
+        try:
+            from core.strategy_health import load_health
+            out["swing_health"] = load_health()
+        except Exception as e:
+            out["swing_health"] = {"error": str(e)}
+        out["swing_decision"] = {
+            "status": "CLOSED",
+            "date": "2026-07-21",
+            "detail": ("india_swing permanently dropped - do not re-tune, "
+                       "re-backtest, or buy data. Money path is the "
+                       "allocation engine (index-core + 200DMA overlay)."),
+        }
+
+        # 4. Data-layer truth the panels must not hide.
+        out["dhan"] = {
+            "expired": True,
+            "since": "2026-07-24",
+            "consequence": ("charts + WebSocket dead: live order flow, "
+                            "bid/ask and L2 depth not capturable. Live "
+                            "trades via Dhan unavailable until resubscribed."),
+        }
+
+        # 5. Rule-based verdicts, one row per strategy lane.
+        perf = out.get("journal_perf", {})
+        pf = perf.get("profit_factor")
+        lanes = []
+        lanes.append({
+            "lane": "Signal terminal (intraday F&O)",
+            "verdict": "REJECT" if (pf is not None and pf < 1.0) else "UNPROVEN",
+            "evidence": (f"journal PF {pf}, win {perf.get('win_rate')}, "
+                         f"expectancy {perf.get('expectancy_pct')}%/trade "
+                         f"over {perf.get('n_clean')} clean trades"),
+            "action": "do not size up; do not tinker-upgrade",
+        })
+        lanes.append({
+            "lane": "India swing v3",
+            "verdict": "CLOSED",
+            "evidence": "decision 2026-07-21 after exhaustive negative",
+            "action": "none - decision is permanent",
+        })
+        rsi2 = next((h for h in out.get("hypotheses", [])
+                     if "RSI-2" in str(h.get("thesis", ""))), None)
+        lanes.append({
+            "lane": "RSI-2 mean-reversion (futures)",
+            "verdict": str((rsi2 or {}).get("verdict", "UNKNOWN")),
+            "evidence": "power-passing t=4.43; alive at 0.06-0.10% cost only",
+            "action": "final statistician gate at 0.10% pending - not live",
+        })
+        lanes.append({
+            "lane": "Allocation engine (index-core + 200DMA)",
+            "verdict": "ACTIVE",
+            "evidence": "path #1 decision 2026-06-26; earns market, not alpha",
+            "action": "deploy capital + time; monitor monthly (/api/allocation)",
+        })
+        out["lanes"] = lanes
+        out["bottom_line"] = (
+            "Upgrade question is answered by evidence, not effort: the "
+            "traded strategies are net-negative or closed; the validated "
+            "path is the allocation engine. New ideas go through the "
+            "hypothesis registry and statistician gate first."
+        )
+        return out
+
+    try:
+        return await _run(lambda: _cached("verdict", 300, _load))
+    except Exception as e:
+        return {"error": str(e)}
+
+
 # ── Market capture (point-in-time archives + trend state) ───────────────────
 
 @app.get("/api/capture")

@@ -6,6 +6,7 @@ import { usePathname } from "next/navigation"
 // No-API workflow only. Legacy Dhan-token tabs (Signals, Option Chain,
 // Volume, Positions, Intelligence, Config) were removed 2026-07-15.
 const TABS = [
+  { href: "/verdict",    label: "Verdict"    },
   { href: "/swing",      label: "Swing"      },
   { href: "/allocation", label: "Allocation" },
   { href: "/accuracy",   label: "Accuracy"   },
