@@ -53,7 +53,17 @@ SIGNALS_FILE = ROOT / "logs" / "signals.json"
 JOURNAL_FILE = ROOT / "logs" / "signal_journal.jsonl"
 TRADES_FILE  = ROOT / "logs" / "trades.csv"
 
-_executor = ThreadPoolExecutor(max_workers=4)
+# Sized well above the number of Dhan-dependent endpoints. With 4 workers, a
+# single wedged loader (spike-alerts scanning 161 symbols against a dead Dhan)
+# starved the pool and every unrelated endpoint — /api/status, /api/verdict —
+# hung behind it. Threads cannot be killed in Python, so the defence is
+# headroom plus a per-request deadline (see _run).
+_executor = ThreadPoolExecutor(max_workers=16)
+
+# No single request may hold a client longer than this. On expiry the caller
+# gets a structured timeout instead of hanging; the worker thread is left to
+# finish and its result lands in the TTL cache for the next request.
+_RUN_DEADLINE_SEC = 12.0
 
 # ── Simple TTL cache ──────────────────────────────────────────────────────────
 
@@ -70,9 +80,23 @@ def _cached(key: str, ttl: float, loader):
     return val
 
 
-async def _run(fn, *args):
+class RunTimeout(Exception):
+    """A loader exceeded its deadline. Endpoints turn this into a payload."""
+
+
+async def _run(fn, *args, timeout: float = _RUN_DEADLINE_SEC):
+    """Run a blocking loader off the event loop, under a deadline.
+
+    asyncio.wait_for cancels the *await*, not the thread — the worker keeps
+    running and populates the cache, so a slow-but-alive source self-heals on
+    the next poll while a dead one stops wedging the UI.
+    """
     loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(_executor, fn, *args)
+    fut = loop.run_in_executor(_executor, fn, *args)
+    try:
+        return await asyncio.wait_for(asyncio.shield(fut), timeout=timeout)
+    except asyncio.TimeoutError:
+        raise RunTimeout(f"loader exceeded {timeout:.0f}s deadline")
 
 
 # ── File-based helpers ────────────────────────────────────────────────────────
@@ -436,11 +460,24 @@ def get_status():
     except Exception:
         trade_token = {"valid": False, "hours_left": None, "needs_refresh": True, "message": "Error"}
 
+    # Credential PRESENCE is not liveness. This chip read "Active" for weeks
+    # off a stored api-key while every /charts/* call returned 401. Prefer the
+    # real probe when one is already cached; never trigger a probe from here
+    # (this endpoint is polled on a timer and must not block on the network).
     try:
         dh = sec.data_token_health()
-        data_api = {"valid": dh.valid, "message": dh.message}
+        data_api = {"valid": dh.valid, "message": dh.message, "verified": False}
     except Exception:
-        data_api = {"valid": False, "message": "Error"}
+        data_api = {"valid": False, "message": "Error", "verified": False}
+
+    probe = _CACHE.get("dhanlive", (None, 0))[0]
+    if probe is not None:
+        data_api = {
+            "valid": bool(probe.get("working")),
+            "message": probe.get("message") or probe.get("status", ""),
+            "status": probe.get("status"),
+            "verified": True,
+        }
 
     return {
         "market_status": mkt_status,
@@ -537,6 +574,18 @@ async def get_chain(symbol: str = "NIFTY"):
 
 @app.get("/api/spike-alerts")
 async def get_spike_alerts(min_confidence: int = 55):
+    """Intraday volume-spike alerts. Dhan-dependent — skipped when Dhan is down.
+
+    Scanning the full F&O universe against a dead Dhan means 161 symbols x
+    retry/backoff, which is how this endpoint used to block indefinitely. The
+    probe result is already cached, so the short-circuit is free.
+    """
+    probe = await _run(_dhan_probe_cached)
+    if not probe.get("working"):
+        return {"alerts": [], "ts": datetime.now().isoformat(),
+                "skipped": True,
+                "reason": f"Dhan not available ({probe.get('status')})"}
+
     def _load():
         dd = _get_dashboard_data()
         from core.universe import FO_UNIVERSE
@@ -548,6 +597,9 @@ async def get_spike_alerts(min_confidence: int = 55):
     try:
         alerts = await _run(_load)
         return {"alerts": alerts or [], "ts": datetime.now().isoformat()}
+    except RunTimeout as e:
+        return {"alerts": [], "ts": datetime.now().isoformat(),
+                "timeout": True, "error": str(e)}
     except Exception as e:
         return {"alerts": [], "ts": datetime.now().isoformat(), "error": str(e)}
 
@@ -623,6 +675,103 @@ async def get_allocation(refresh: bool = False):
     except Exception as e:
         return {"targets": {}, "backtest": {}, "horizon_accuracy": {},
                 "alert": None, "error": str(e)}
+
+
+# ── Dhan live probe (validity, not presence) ────────────────────────────────
+
+def _dhan_probe() -> Dict[str, Any]:
+    """Probe Dhan with stored credentials; report what actually came back.
+
+    Presence of a token file is NOT liveness — the expired subscription kept
+    showing "Active" for exactly that reason. One cheap authenticated call:
+      401            -> expired / invalid subscription
+      200            -> working
+      other non-401  -> auth accepted, request-shape issue (sub is alive)
+    """
+    import requests as rq
+    from core import secrets as _sec
+
+    def _try(fn):
+        try:
+            return fn()
+        except Exception:
+            return None
+
+    trade_token = _try(_sec.get_access_token)
+    data_token = _try(_sec.get_data_token)
+    api_secret = _try(_sec.get_data_api_secret)
+    client_id = _try(_sec.get_client_id)
+
+    # /charts/* is served against the DATA credential, not the trading
+    # token — probing the wrong one reports "unconfigured" while the real
+    # blocker is an expired data subscription. Prefer data, fall back.
+    token = data_token or trade_token
+    used = "data" if data_token else ("trade" if trade_token else None)
+
+    configured = {
+        "trade_token": bool(trade_token and trade_token.startswith("eyJ")),
+        "data_token": bool(data_token and data_token.startswith("eyJ")),
+        "data_api_key": bool(_try(_sec.get_data_api_key)),
+        "client_id": bool(client_id),
+    }
+    if not token:
+        return {"configured": configured, "working": False,
+                "status": "unconfigured", "probed_with": None,
+                "message": "no Dhan token stored - paste one below"}
+
+    headers = {"Content-Type": "application/json",
+               "Access-Token": token, "client-id": client_id or ""}
+    if api_secret:
+        headers["api-secret"] = api_secret
+
+    try:
+        r = rq.post(
+            "https://api.dhan.co/v2/charts/historical",
+            json={"securityId": "2885", "exchangeSegment": "NSE_EQ",
+                  "instrument": "EQUITY", "fromDate": "2026-07-20",
+                  "toDate": "2026-07-23"},
+            headers=headers, timeout=10, verify=False,
+        )
+        code = r.status_code
+    except Exception as e:
+        return {"configured": configured, "working": False,
+                "status": "unreachable", "probed_with": used,
+                "message": f"probe failed: {type(e).__name__}"}
+
+    if code == 401:
+        return {"configured": configured, "working": False, "http": code,
+                "status": "expired", "probed_with": used,
+                "message": ("Dhan returned 401 - subscription expired or "
+                            "token invalid. Live scanning stays idle "
+                            "until a valid token is saved.")}
+    if code == 200:
+        return {"configured": configured, "working": True, "http": code,
+                "status": "working", "probed_with": used,
+                "message": "Dhan data API responding"}
+    return {"configured": configured, "working": False, "http": code,
+            "status": "auth_ok_shape_issue", "probed_with": used,
+            "message": (f"HTTP {code}: auth accepted but request shape "
+                        "rejected (DH-905 class) - subscription alive")}
+
+
+def _dhan_probe_cached(refresh: bool = False) -> Dict[str, Any]:
+    """Probe result, cached 15 min. The shared warm path for every
+    Dhan-dependent endpoint, so none of them has to guess whether the
+    subscription is alive."""
+    if refresh:
+        _CACHE.pop("dhanlive", None)
+    return _cached("dhanlive", 900, _dhan_probe)
+
+
+@app.get("/api/dhan-live-status")
+async def dhan_live_status(refresh: bool = False):
+    """Live Dhan connection state - probed, never inferred from file presence."""
+    try:
+        return await _run(lambda: _dhan_probe_cached(refresh))
+    except RunTimeout as e:
+        return {"working": False, "status": "timeout", "message": str(e)}
+    except Exception as e:
+        return {"working": False, "status": "error", "message": str(e)}
 
 
 # ── Strategy verdict (the "is it good or does it need upgrade" answer) ──────
