@@ -78,7 +78,16 @@ closed negative; this exists so future work is data-rich and survivorship-honest
 |---|---|---|---|
 | EOD full universe | `bhavcopy_archive.py` | `logs/bhavcopy_archive/` | Yes — back-fillable for years |
 | Intraday 5m | `core/intraday_capture.py` | `logs/intraday_5m/` | **NO — 60-day window, then gone forever** |
+| Day movement shape | `core/day_structure.py` | `logs/day_structure/` | derived from 5m (so inherits the 60-day rule transitively) |
+| Swing events | `core/swing_structure.py` | `logs/swing_events.jsonl` | events point-in-time; re-derivable from EOD archive |
 | Trend state | `core/market_state.py` | `logs/capture_state.json` | derived |
+
+Movement layers are DESCRIPTIVE only (day_type / pivots / breakout events =
+what the tape did). Swing pivots are timestamped at CONFIRMATION (pivot+5
+bars) — consuming them keyed on pivot_date is lookahead. Breakout events carry
+forward-return slots filled later by `--analyze`; they are evidence for a
+future statistician gate, not entries. Partial sessions recompute for 5 days
+(`RECOMPUTE_DAYS`) so a mid-day capture can't freeze a wrong label.
 
 Daily job: `python capture_task.py` (run after 16:00 IST).
 Endpoints: `GET /api/capture`, `GET /api/market-state`.

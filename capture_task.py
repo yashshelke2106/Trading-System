@@ -111,6 +111,50 @@ def run_intraday(universe: str = "top100", pace: float = 0.4) -> dict:
     return out
 
 
+# ── Layer: day movement structure ───────────────────────────────────────────
+
+def run_day_structure() -> dict:
+    """Per-session shape descriptors from the 5m archive. Derived layer —
+    recomputable as long as the underlying bars were captured, so a missed
+    run costs nothing here (it costs on the intraday layer)."""
+    out = {"layer": "day_structure", "ok": False}
+    try:
+        from core import day_structure as dstru
+        res = dstru.build()
+        out.update({"ok": True, **res})
+    except Exception as exc:
+        out["error"] = f"{type(exc).__name__}: {exc}"
+        out["trace"] = traceback.format_exc()[-800:]
+    return out
+
+
+# ── Layer: swing events ─────────────────────────────────────────────────────
+
+def run_swing(universe: str = "top100") -> dict:
+    """Point-in-time swing events + forward-slot fills. Uses daily bars via
+    the bhavcopy archive, which lags one session (published post-close), so
+    today's breakout lands on tomorrow's run — recorded, never lost."""
+    out = {"layer": "swing", "ok": False}
+    try:
+        from core import swing_structure as ss
+        from core.universe import FO_UNIVERSE, TOP100_LIQUID
+        symbols = list(FO_UNIVERSE if universe == "fo" else TOP100_LIQUID)
+        upd = ss.update(symbols)
+        ana = ss.analyze()
+        out.update({
+            "ok": True,
+            "symbols": upd["symbols"],
+            "events_added": upd["added"],
+            "events_total": upd["total"],
+            "fwd_filled": ana["filled"],
+            "failed": upd["failed"],
+        })
+    except Exception as exc:
+        out["error"] = f"{type(exc).__name__}: {exc}"
+        out["trace"] = traceback.format_exc()[-800:]
+    return out
+
+
 # ── Layer: trend state snapshot ─────────────────────────────────────────────
 
 def run_state(universe: str = "top100", with_context: bool = False) -> dict:
@@ -147,7 +191,7 @@ def run_state(universe: str = "top100", with_context: bool = False) -> dict:
 
 # ── Orchestration ───────────────────────────────────────────────────────────
 
-ALL_LAYERS = ("eod", "intraday", "state")
+ALL_LAYERS = ("eod", "intraday", "day_structure", "swing", "state")
 
 
 def run(layers=ALL_LAYERS, universe: str = "top100",
@@ -163,6 +207,10 @@ def run(layers=ALL_LAYERS, universe: str = "top100",
         status["layers"]["eod"] = run_eod()
     if "intraday" in layers:
         status["layers"]["intraday"] = run_intraday(universe, pace=pace)
+    if "day_structure" in layers:
+        status["layers"]["day_structure"] = run_day_structure()
+    if "swing" in layers:
+        status["layers"]["swing"] = run_swing(universe)
     if "state" in layers:
         status["layers"]["state"] = run_state(universe, with_context=with_context)
 
