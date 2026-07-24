@@ -96,27 +96,58 @@ def get_sector_for(symbol: str) -> str:
     return SYMBOL_TO_SECTOR.get(symbol.upper(), DEFAULT_SECTOR)
 
 
+def _normalise_cols(df: pd.DataFrame) -> pd.DataFrame:
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = [c[0] if isinstance(c, tuple) else c for c in df.columns]
+    df.columns = [str(c).lower() for c in df.columns]
+    return df
+
+
 def _fetch_sector_daily(sector_ticker: str, days: int = 60) -> Optional[pd.DataFrame]:
-    """Fetch sector index daily bars via yfinance, with 1h cache."""
+    """Fetch sector index daily bars, with 1h cache.
+
+    Tries Dhan first, then falls back to yfinance. The fallback is not
+    optional decoration: sector tickers here are yfinance symbols (^NSEBANK,
+    ^CNXIT, ...) and the Dhan Data API subscription has expired, so the Dhan
+    path returns 401 for every index. Without the fallback sector_bias()
+    answers "unknown" for every symbol, which makes check_sector_alignment()
+    fail open and pass 100% of trades — a gate that reads as active in code
+    while being inert in production.
+    """
     now = time.time()
     cached = _SECTOR_CACHE.get(sector_ticker)
     if cached and (now - cached[0]) < _CACHE_TTL_SEC:
         return cached[1]
 
+    # ── Primary: Dhan ────────────────────────────────────────────────────
     try:
         from core.api_dhan import dhan_daily
         df = dhan_daily(sector_ticker, days_back=days)
-        if df is None or df.empty:
-            log.debug(f"[Sector] {sector_ticker}: Dhan empty (index may be unavailable)")
+        if df is not None and not df.empty:
+            df = _normalise_cols(df)
+            _SECTOR_CACHE[sector_ticker] = (now, df)
+            return df
+        log.debug(f"[Sector] {sector_ticker}: Dhan empty, trying yfinance")
+    except Exception as e:
+        log.debug(f"[Sector] {sector_ticker} Dhan failed ({e}), trying yfinance")
+
+    # ── Fallback: yfinance ───────────────────────────────────────────────
+    try:
+        import yfinance as yf
+        raw = yf.Ticker(sector_ticker).history(period=f"{days}d", interval="1d")
+        if raw is None or raw.empty:
+            log.debug(f"[Sector] {sector_ticker}: yfinance empty")
             return None
-        # Flatten multi-index columns if present
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = [c[0] if isinstance(c, tuple) else c for c in df.columns]
-        df.columns = [c.lower() for c in df.columns]
+        df = _normalise_cols(raw.copy())
+        if "close" not in df.columns:
+            return None
+        df = df.dropna(subset=["close"])
+        if df.empty:
+            return None
         _SECTOR_CACHE[sector_ticker] = (now, df)
         return df
     except Exception as e:
-        log.debug(f"[Sector] {sector_ticker} fetch failed: {e}")
+        log.debug(f"[Sector] {sector_ticker} yfinance failed: {e}")
         return None
 
 

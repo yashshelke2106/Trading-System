@@ -24,6 +24,10 @@ class MarketContext:
     nifty_level: float
     banknifty_level: float
     reason: str
+    # True when either index frame was synthetic, i.e. the real fetch failed
+    # and `bias` is a forced NEUTRAL rather than a measurement. Callers that
+    # act on bias should check this before trusting it.
+    synthetic: bool = False
 
 
 class MarketBiasEngine:
@@ -51,7 +55,25 @@ class MarketBiasEngine:
         except Exception:
             pass
 
-        # Fresh mock data each call (no fixed seed) to avoid stale analysis
+        # ── Synthetic fallback ────────────────────────────────────────────
+        # Reaching here means the real fetch failed. The frame below is RANDOM
+        # geometric Brownian motion, not market data. It is retained so mock
+        # mode and offline dev still run, but it MUST be marked: previously
+        # this returned unlabelled noise, and calculate_trend() duly scored it
+        # STRONG_UP / strength 1.00, handing live_runner.py and
+        # trading_pipeline.py a confident LONG_BIAS synthesised from nothing.
+        # df.attrs["synthetic"] is the contract get_market_bias() checks.
+        try:
+            import config as _cfg
+            _mock_expected = bool(getattr(_cfg, "USE_MOCK_DATA", False))
+        except Exception:
+            _mock_expected = False
+
+        if not _mock_expected:
+            # Not a dev fixture — a real data outage being papered over.
+            print(f"[MarketBias] WARNING: {symbol} index fetch FAILED — "
+                  f"returning SYNTHETIC bars. Bias will be forced NEUTRAL.")
+
         rng = np.random.default_rng(int(pd.Timestamp.now().timestamp()) % 100000)
         dates = pd.date_range(end=pd.Timestamp.now(), periods=days, freq='D')
         base = 22500 if symbol == "NIFTY" else 49000
@@ -67,6 +89,7 @@ class MarketBiasEngine:
             'close': closes,
             'volume': rng.integers(50_000_000, 200_000_000, days),
         })
+        df.attrs["synthetic"] = True
 
         self.cache[symbol] = (time.time(), df)
         return df
@@ -121,7 +144,26 @@ class MarketBiasEngine:
             nifty_data = self.get_index_data("NIFTY", 50)
         if banknifty_data is None:
             banknifty_data = self.get_index_data("BANKNIFTY", 50)
-        
+
+        # A directional bias read off synthetic bars is worse than no bias at
+        # all — it is indistinguishable from a real one downstream, and
+        # market_bias propagates into signal_journal, the ML feature vector
+        # and the learning loop. Fail to NEUTRAL, loudly.
+        _synthetic = bool(
+            getattr(nifty_data, "attrs", {}).get("synthetic")
+            or getattr(banknifty_data, "attrs", {}).get("synthetic")
+        )
+        if _synthetic:
+            return MarketContext(
+                bias=MarketBias.NEUTRAL,
+                trend="UNKNOWN",
+                strength=0.0,
+                nifty_level=float(nifty_data['close'].iloc[-1]) if len(nifty_data) else 0.0,
+                banknifty_level=float(banknifty_data['close'].iloc[-1]) if len(banknifty_data) else 0.0,
+                reason="index data unavailable (synthetic bars) - bias forced NEUTRAL",
+                synthetic=True,
+            )
+
         nifty_trend, nifty_strength = self.calculate_trend(nifty_data)
         bank_trend, bank_strength = self.calculate_trend(banknifty_data)
         

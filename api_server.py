@@ -625,6 +625,107 @@ async def get_allocation(refresh: bool = False):
                 "alert": None, "error": str(e)}
 
 
+# ── Market capture (point-in-time archives + trend state) ───────────────────
+
+@app.get("/api/capture")
+async def get_capture():
+    """Capture-job status and archive health.
+
+    `intraday.worst_stale_days` is the number to watch: yfinance serves only
+    ~60 days of 5-minute history, so once a symbol goes staler than that the
+    missing sessions are unrecoverable. `unrecoverable: true` means data is
+    actively being lost and capture_task.py is not running often enough.
+    """
+    def _load():
+        from capture_task import load_status
+
+        out = {"last_run": load_status()}
+
+        # Survivorship-complete EOD archive.
+        try:
+            daily_dir = Path("logs/bhavcopy_archive/daily")
+            sym_dir = Path("logs/bhavcopy_archive/symbols")
+            days = sorted(p.stem for p in daily_dir.glob("*.parquet"))
+            out["eod_archive"] = {
+                "trading_days": len(days),
+                "first": days[0] if days else None,
+                "last": days[-1] if days else None,
+                "symbols": sum(1 for _ in sym_dir.glob("*.parquet")),
+                "survivorship_complete": True,
+            }
+        except Exception as e:
+            out["eod_archive"] = {"error": str(e)}
+
+        # Forward-only intraday archive.
+        try:
+            from core.intraday_capture import coverage, MAX_LOOKBACK_DAYS
+            cov = coverage()
+            held = cov[cov["bars"] > 0] if not cov.empty else cov
+            if held.empty:
+                out["intraday"] = {"symbols": 0}
+            else:
+                worst = int(held["stale_days"].max())
+                out["intraday"] = {
+                    "symbols": int(len(held)),
+                    "sessions_median": int(held["sessions"].median()),
+                    "first": str(held["first"].min()),
+                    "last": str(held["last"].max()),
+                    "worst_stale_days": worst,
+                    "limit_days": MAX_LOOKBACK_DAYS,
+                    "unrecoverable": bool(worst > MAX_LOOKBACK_DAYS),
+                }
+        except Exception as e:
+            out["intraday"] = {"error": str(e)}
+
+        return out
+
+    try:
+        return await _run(lambda: _cached("capture", 60, _load))
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.get("/api/market-state")
+async def get_market_state(universe: str = "top100", context: bool = False):
+    """Trend state per symbol, with the evidence and the gaps in it.
+
+    `unavailable_factors` is always returned. The canonical list of things that
+    move a stock is far larger than what this stack can measure — order flow,
+    depth, live news, options flow are all absent — and a caller must be able
+    to see that rather than infer completeness from a confident label.
+
+    context=true adds sector and market factors (slower: network per call).
+    """
+    def _load():
+        from core import market_state as ms
+        from core.universe import FO_UNIVERSE, TOP100_LIQUID
+
+        symbols = list(FO_UNIVERSE if universe == "fo" else TOP100_LIQUID)
+        states = ms.classify_many(symbols, with_context=context)
+
+        tally: Dict[str, int] = {}
+        for s in states:
+            tally[s.direction] = tally.get(s.direction, 0) + 1
+
+        return {
+            "universe": universe,
+            "with_context": context,
+            "tally": tally,
+            "states": [s.to_dict() for s in states],
+            "unavailable_factors": ms.UNAVAILABLE_FACTORS,
+            "limitation": (
+                "Labels describe what the tape has done. These indicators "
+                "cannot separate a trend from a lucky random walk - see "
+                "core/market_state.py KNOWN LIMITATION."
+            ),
+        }
+
+    try:
+        return await _run(lambda: _cached(f"mstate:{universe}:{context}", 300, _load))
+    except Exception as e:
+        return {"tally": {}, "states": [], "error": str(e)}
+
+
 # ── Swing framework (no-API strategy: screen + paper journal + health) ───────
 
 @app.get("/api/swing")

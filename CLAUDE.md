@@ -47,18 +47,53 @@ Each signal: `{symbol, direction, entry_price, sl_price, target_price, rr_ratio,
 **Signal-only**: scan → signals.json → Streamlit dashboard → manual execution in Dhan app.
 `PAPER_TRADE=True` in config.py — no real orders even if live_runner.py is running.
 
-## Dhan API Status
-Data API: SUBSCRIBED + auth OK (NOT DH-902 — that note was stale/wrong).
-Live diagnosis: requests reach Dhan, auth passes, per-field validation
-works (omit a field → specific "X is required"). Blocker is **DH-905**
-(Dhan rejects request param VALUES) on the documented v2 schema — a
-request-mechanics mismatch vs the official `dhanhq` SDK, not a dead API.
-Fixed: `_segment_for` now returns `IDX_I` (was wrong `NSE_IDX`).
-Remaining DH-905 must be closed on a real machine using the dhanhq SDK
-as reference (this sandbox has SSL interception + a simulated 2026
-clock that block a clean end-to-end Dhan call). yfinance fallback
-active meanwhile — adequate for SWING (daily bars).
+## Dhan API Status — EXPIRED (2026-07-24)
+**The Dhan Data API subscription has expired.** Every `/v2/charts/*` call
+returns HTTP 401. Consequences, verified:
+- `core/api_dhan.py` daily/intraday → dead
+- `core/market_feed.py` (WebSocket LTP/volume/**order-flow queues**) → dead.
+  Order flow, bid/ask and L2 depth are therefore NOT capturable at all.
+- `core/market_bias.py` fell back to **randomly generated bars** and scored
+  them a confident LONG_BIAS. Fixed: synthetic frames are now tagged
+  `df.attrs["synthetic"]` and force `MarketBias.NEUTRAL` + `ctx.synthetic=True`.
+- `core/sector_rotation.py` routed to the dead Dhan endpoint, so
+  `check_sector_alignment()` failed open and passed 100% of trades. Fixed:
+  yfinance fallback restored (matches its own docstring).
+
+Working data sources (probed live 2026-07-24, market open):
+| Source | Status |
+|---|---|
+| yfinance daily | OK |
+| yfinance intraday 5m | OK (~3 min behind live; **60-day max lookback**) |
+| NSE bhavcopy archive | OK (real zip, full CM segment) |
+| Google News RSS | reachable but STALE (freshest ~68h, most 800-1300h) — unusable |
+
 Ticker map edge cases: TATAMOTORS→TMCV.NS, MCDOWELL-N→UNITDSPR.NS, DEEPAKNT→DEEPAKNTR.NS
+
+## Market Capture Layer
+Point-in-time recorder. **Not** a signal generator — the alpha hunt is a
+closed negative; this exists so future work is data-rich and survivorship-honest.
+
+| Layer | Module | Archive | Recoverable later? |
+|---|---|---|---|
+| EOD full universe | `bhavcopy_archive.py` | `logs/bhavcopy_archive/` | Yes — back-fillable for years |
+| Intraday 5m | `core/intraday_capture.py` | `logs/intraday_5m/` | **NO — 60-day window, then gone forever** |
+| Trend state | `core/market_state.py` | `logs/capture_state.json` | derived |
+
+Daily job: `python capture_task.py` (run after 16:00 IST).
+Endpoints: `GET /api/capture`, `GET /api/market-state`.
+
+EOD archive holds 2019-01-01 → present, **3,526 symbols including delisted**
+(survivorship-complete — yfinance shows survivors only and inflates PF 1.5-2×).
+
+Merge rule is point-in-time: **the bar already on disk wins**. After a split,
+newly fetched bars arrive adjusted while captured bars stay as-quoted, so a
+series can straddle an adjustment boundary. `conflicts` in the capture summary
+is the tripwire — non-zero means a corporate action.
+
+`market_state` KNOWN LIMITATION: these indicators cannot separate a trend from
+a lucky random walk. ADX(14) lands ~18-30 on pure noise. Labels describe what
+the tape has done, never what it will do.
 
 ## NSE Market Hours
 09:15 – 15:30 IST, Mon–Fri. Expiry: weekly Thursday (stocks), monthly last Thursday (index).
