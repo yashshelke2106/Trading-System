@@ -15,6 +15,10 @@ import { usePathname } from "next/navigation"
 // Legacy Dhan-token tabs (Signals, Option Chain, Volume, Positions,
 // Intelligence, Config) were removed 2026-07-15; /live supersedes them with
 // a single page that probes liveness instead of assuming it.
+const HOME = [
+  { href: "/", label: "Dashboard" },
+]
+
 const OFFLINE = [
   { href: "/verdict",    label: "Verdict"    },
   { href: "/swing",      label: "Swing"      },
@@ -41,7 +45,10 @@ export default function NavBar() {
   const pathname = usePathname()
 
   const tab = (t: { href: string; label: string }) => {
-    const active = pathname === t.href || pathname.startsWith(t.href)
+    // "/" is a prefix of every route, so it must match exactly or the
+    // Dashboard tab renders active on every page.
+    const active = t.href === "/" ? pathname === "/"
+      : pathname === t.href || pathname.startsWith(t.href)
     return (
       <Link
         key={t.href}
@@ -56,6 +63,8 @@ export default function NavBar() {
 
   return (
     <nav className="navWrap" aria-label="Primary">
+      {HOME.map(tab)}
+      <span style={DIVIDER} aria-hidden="true" />
       <span style={GROUP_LABEL} aria-hidden="true">no&nbsp;api</span>
       {OFFLINE.map(tab)}
       <span style={DIVIDER} aria-hidden="true" />
