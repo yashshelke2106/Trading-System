@@ -46,6 +46,60 @@
 
   --background: #05080f;
   --foreground: #e6eefb;
+
+  /* ── Verdict semantics (used by /verdict and /live) ──
+     Named by MEANING, not hue, so the light theme can shift them without
+     any component knowing a theme exists. */
+  --ok:   #2fbf71;          /* pass / active / working */
+  --bad:  #e5484d;          /* reject / closed / dead  */
+  --warn: #d9a514;          /* pending / degraded      */
+}
+
+/* ============================================================
+   LIGHT THEME
+   Every surface, border and text token is re-pointed; nothing else in the
+   sheet changes because the whole design system already reads from these
+   variables. Applied via data-theme on <html> (see ThemeToggle), which is
+   set by an inline script before first paint so there is no dark flash.
+   ============================================================ */
+html[data-theme="light"] {
+  --bg:   #f4f6fa;
+  --c0:   #ffffff;
+  --c1:   #ffffff;
+  --c2:   #eef1f7;
+  --c3:   #e3e8f1;
+  --glass: rgba(255,255,255,.82);
+
+  --bd:   #d8dfea;
+  --bdh:  #b9c5d8;
+  --bda:  #2f7fd0;
+
+  --tx:   #101826;
+  --txm:  #3d4c63;
+  --txd:  #5d6d85;
+  --txs:  #8494a9;
+
+  /* Darker accents: the dark-theme neons fail contrast on white. */
+  /* Contrast-checked against both light surfaces (#fff card, #f4f6fa page):
+     the dark theme's #1fdd9a scores 1.7 and the first pick #0a9d63 only 3.49,
+     both under the 4.5 AA floor. #077a4b lands at 5.39 / 4.98. */
+  --g:    #077a4b;  --gd: #05603a;
+  --r:    #d92b45;  --rd: #a81f34;
+  --y:    #b07d05;
+  --o:    #c46a10;
+  --b:    #1668c7;
+  --p:    #6d4de0;
+
+  --ok:   #077a4b;
+  --bad:  #d92b45;
+  --warn: #b07d05;
+
+  --sh-1: 0 1px 2px rgba(16,24,38,.08);
+  --sh-2: 0 6px 20px -8px rgba(16,24,38,.18);
+  --sh-3: 0 16px 44px -16px rgba(16,24,38,.22);
+
+  --background: #f4f6fa;
+  --foreground: #101826;
 }
 
 @theme inline {
@@ -72,7 +126,15 @@ body {
   text-rendering: optimizeLegibility;
 }
 
+html[data-theme="light"] body {
+  background:
+    radial-gradient(1200px 600px at 78% -8%, rgba(22,104,199,.05), transparent 60%),
+    radial-gradient(1000px 520px at 8% 4%, rgba(10,157,99,.04), transparent 55%),
+    var(--bg);
+}
+
 ::selection { background: rgba(70,180,255,.28); color: #fff; }
+html[data-theme="light"] ::selection { background: rgba(22,104,199,.20); color: #101826; }
 
 a { color: inherit; text-decoration: none; }
 
@@ -336,3 +398,18 @@ table.t tbody tr:hover { background: var(--c2); }
   .sectionNav { margin-left: 0; width: 100%; }
   .sectionLabel { font-size: 13px; }
 }
+
+/* ── Theme toggle ── */
+.themeBtn {
+  flex: 0 0 auto;
+  width: 32px; height: 32px; border-radius: 8px;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 14px; line-height: 1;
+  color: var(--txd);
+  background: var(--c2);
+  border: 1px solid var(--bd);
+  cursor: pointer;
+  transition: color .16s var(--ease), border-color .16s var(--ease),
+              background .16s var(--ease);
+}
+.themeBtn:hover { color: var(--tx); border-color: var(--bdh); background: var(--c3); }

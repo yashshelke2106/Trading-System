@@ -4,6 +4,7 @@ import IndexBar from "@/components/IndexBar"
 import MarketStatusBar from "@/components/MarketStatus"
 import NavBar from "@/components/NavBar"
 import SectionNav from "@/components/SectionNav"
+import ThemeToggle, { THEME_INIT } from "@/components/ThemeToggle"
 import VersionStamp from "@/components/VersionStamp"
 
 export const metadata: Metadata = {
@@ -13,7 +14,14 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" className="h-full">
+    // suppressHydrationWarning: THEME_INIT stamps data-theme on <html> before
+    // React hydrates, so the server markup intentionally differs here.
+    <html lang="en" className="h-full" suppressHydrationWarning>
+      <head>
+        {/* Runs before first paint — without it, a light-theme user sees a
+            dark frame flash on every navigation. */}
+        <script dangerouslySetInnerHTML={{ __html: THEME_INIT }} />
+      </head>
       <body className="min-h-full flex flex-col">
         {/* ── Sticky shell: brand + primary nav ── */}
         <header className="appShell">
@@ -26,6 +34,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               <span className="appTag">NSE · India</span>
             </div>
             <SectionNav />
+            <ThemeToggle />
           </div>
           <NavBar />
         </header>

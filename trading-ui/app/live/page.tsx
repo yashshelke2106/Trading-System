@@ -35,12 +35,12 @@ const TH: React.CSSProperties = {
   borderBottom: "1px solid var(--bdh)", whiteSpace: "nowrap", textAlign: "left",
 }
 const TD: React.CSSProperties = {
-  padding: "6px 10px", borderBottom: "1px solid rgba(26,45,71,.6)",
+  padding: "6px 10px", borderBottom: "1px solid color-mix(in srgb, var(--bd) 60%, transparent)",
   fontFamily: "'JetBrains Mono', monospace", fontSize: ".8em",
   color: "var(--tx)", whiteSpace: "nowrap",
 }
 const CARD: React.CSSProperties = {
-  background: "var(--c1, #11151f)", border: "1px solid var(--bd)",
+  background: "var(--c1)", border: "1px solid var(--bd)",
   borderRadius: 8, padding: "12px 14px", marginBottom: 14, overflowX: "auto",
 }
 const H2: React.CSSProperties = {
@@ -58,7 +58,9 @@ const BTN: React.CSSProperties = {
   whiteSpace: "nowrap",
 }
 
-const GREEN = "#2fbf71", RED = "#e5484d", AMBER = "#d9a514"
+// Semantic tokens, not hex: globals.css re-points these per theme, so the
+// same "REJECT is red" logic reads correctly on light and dark alike.
+const GREEN = "var(--ok)", RED = "var(--bad)", AMBER = "var(--warn)"
 
 interface LiveStatus {
   // Keys mirror /api/dhan-live-status exactly. `data_api_key` being present
