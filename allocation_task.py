@@ -32,13 +32,24 @@ ALERT_FILE = os.path.join("logs", "allocation_alert.txt")
 
 
 def build_status(refresh: bool = True) -> dict:
-    if refresh:
-        refresh_nifty_cache()
+    # Freshness is recorded, never discarded: a failed refresh silently served
+    # 3-day-old bars as a live target on 2026-07-24. Consumers read data_quality.
+    rc = refresh_nifty_cache() if refresh else None
+
     nifty = load_nifty()
 
     out = {
         "computed_at": datetime.now().isoformat(timespec="seconds"),
         "instrument": ALLOCATION_CONFIG["core_instrument"],
+        "data_quality": {
+            "checked": rc is not None,
+            "feed_ok": None if rc is None else rc.ok,
+            "last_bar": None if rc is None else rc.last_date,
+            "age_days": None if rc is None else rc.age_days(),
+            "bars_added": None if rc is None else rc.added,
+            "stale": None if rc is None else rc.is_stale(),
+            "error": None if rc is None else (rc.error or None),
+        },
         "asof": None,
         "targets": {},
         "backtest": {},
@@ -99,14 +110,37 @@ def main() -> int:
     os.makedirs("logs", exist_ok=True)
     with open(STATE_FILE, "w", encoding="utf-8") as f:
         json.dump(status, f, indent=2)
+    dq = status.get("data_quality") or {}
+    stale = bool(dq.get("stale"))
+
     with open(HISTORY_FILE, "a", encoding="utf-8") as f:
         f.write(json.dumps({"asof": status["asof"], "state": cur["state"],
                             "nifty": status["nifty"], "ma200": status["ma200"],
-                            "equity_weight": cur["equity_weight"]}) + "\n")
+                            "equity_weight": cur["equity_weight"],
+                            "stale": stale}) + "\n")
+
+    stale_msg = ""
+    if stale:
+        stale_msg = (
+            f"STALE DATA: NIFTY cache last bar {dq.get('last_bar')} "
+            f"({dq.get('age_days')}d old), feed_ok={dq.get('feed_ok')}"
+            # ASCII only: this prints to the Windows console (cp1252), where a
+            # non-ASCII dash renders as a replacement char in the scheduler log.
+            + (f" - {dq['error']}" if dq.get("error") else "")
+            + ". The target below is computed from OLD prices and is NOT current. "
+              "Do NOT rebalance on it; fix the feed and re-run."
+        )
 
     flipped = prev_state is not None and prev_state != cur["state"]
     near = abs(status["distance_to_flip_pct"]) <= 1.0
-    if flipped or near:
+    if stale:
+        # A stale run must never clear a real alert or look like a clean pass.
+        with open(ALERT_FILE, "w", encoding="utf-8") as f:
+            f.write(stale_msg + "\n")
+        print("!" * 72)
+        print("ALERT:", stale_msg)
+        print("!" * 72)
+    elif flipped or near:
         msg = (f"[{status['asof']}] "
                + (f"STATE FLIP: {prev_state} -> {cur['state']}. " if flipped else "")
                + (f"NEAR FLIP: NIFTY {status['nifty']} is "
@@ -123,11 +157,13 @@ def main() -> int:
         if os.path.exists(ALERT_FILE):
             os.remove(ALERT_FILE)
 
-    print(f"[{status['asof']}] {cur['state']}  "
+    print(f"[{status['asof']}]{' [STALE]' if stale else ''} {cur['state']}  "
           f"{cur['equity_weight']*100:.0f}% equity / {cur['cash_weight']*100:.0f}% cash   "
           f"NIFTY {status['nifty']} vs 200DMA {status['ma200']} "
           f"({status['distance_to_flip_pct']:+.2f}%)")
-    return 0
+    # Non-zero so the scheduler/log surfaces a dead feed instead of it passing
+    # as a normal run — the whole point of this fix.
+    return 2 if stale else 0
 
 
 if __name__ == "__main__":

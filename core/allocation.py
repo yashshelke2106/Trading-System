@@ -48,6 +48,36 @@ class TargetAllocation:
     note: str = ""
 
 
+# A NIFTY cache older than this many calendar days is treated as stale. 4 covers
+# a Fri->Mon weekend plus one public holiday; anything beyond that means the feed
+# has actually stopped, not that the exchange was shut.
+MAX_CACHE_AGE_DAYS = 4
+
+
+@dataclass
+class CacheRefresh:
+    """Outcome of a NIFTY cache refresh.
+
+    Exists because the previous version returned the same bare date string on
+    success and on failure, so no caller could tell a live feed from a dead one.
+    A silent fall back to stale bars once produced a confident 'risk_off 50/50'
+    target computed from 3-day-old prices (2026-07-24). Freshness is now data.
+    """
+    last_date: str                      # last bar on disk (YYYY-MM-DD)
+    ok: bool                            # did the remote fetch succeed?
+    added: int = 0                      # bars appended this run
+    error: str = ""                     # exception text when ok is False
+
+    def age_days(self, today: Optional[pd.Timestamp] = None) -> int:
+        now = pd.Timestamp.now().normalize() if today is None else pd.Timestamp(today).normalize()
+        return int((now - pd.Timestamp(self.last_date).normalize()).days)
+
+    def is_stale(self, today: Optional[pd.Timestamp] = None,
+                 max_age_days: int = MAX_CACHE_AGE_DAYS) -> bool:
+        """Stale if the feed errored, or the newest bar is too old to be current."""
+        return (not self.ok) or self.age_days(today) > max_age_days
+
+
 def _equity_weight_series(nifty: pd.Series, cfg: dict) -> pd.Series:
     """Daily target equity weight (point-in-time: depends only on prior close)."""
     ov = cfg["trend_overlay"]
@@ -172,16 +202,23 @@ def equity_curve_points(series: pd.Series, freq: str = "ME") -> list:
     return [{"d": d.strftime("%Y-%m"), "v": round(float(v), 2)} for d, v in pts.items()]
 
 
-def refresh_nifty_cache(path: str = "logs/bar_cache/NIFTY.parquet") -> str:
-    """Append fresh NIFTY daily bars from yfinance (fallback feed). Returns the
-    last cached date. Never raises — on any fetch failure the stale cache stands."""
+def refresh_nifty_cache(path: str = "logs/bar_cache/NIFTY.parquet") -> CacheRefresh:
+    """Append fresh NIFTY daily bars from yfinance (fallback feed).
+
+    Never raises — on any fetch failure the stale cache stands, so the daily job
+    survives a flaky feed. But the failure is REPORTED: the returned CacheRefresh
+    carries ok/error/age so the caller can refuse to present stale bars as live.
+    Callers must check `.is_stale()`; ignoring it reintroduces the silent-failure
+    bug this type was added to kill.
+    """
     old = pd.read_parquet(path).sort_index()
     try:
         import yfinance as yf
         start = (old.index.max() - pd.Timedelta(days=7)).strftime("%Y-%m-%d")
         new = yf.download("^NSEI", start=start, progress=False, auto_adjust=False)
         if new is None or len(new) == 0:
-            return str(old.index.max().date())
+            return CacheRefresh(str(old.index.max().date()), ok=False,
+                                error="yfinance returned no rows for ^NSEI")
         if isinstance(new.columns, pd.MultiIndex):
             new.columns = [c[0].lower() for c in new.columns]
         else:
@@ -195,7 +232,11 @@ def refresh_nifty_cache(path: str = "logs/bar_cache/NIFTY.parquet") -> str:
         add = new[~(new.index + pd.Timedelta(hours=6)).normalize().isin(old_days)]
         if len(add):
             pd.concat([old, add]).sort_index().to_parquet(path)
-            return str(add.index.max().date())
-        return str(old.index.max().date())
-    except Exception:
-        return str(old.index.max().date())
+            return CacheRefresh(str(add.index.max().date()), ok=True, added=len(add))
+        # Fetch succeeded but had nothing new — normal on a weekend/holiday. The
+        # cache date still drives staleness, so a feed frozen at an old date is
+        # caught by age even though ok is True.
+        return CacheRefresh(str(old.index.max().date()), ok=True, added=0)
+    except Exception as e:
+        return CacheRefresh(str(old.index.max().date()), ok=False,
+                            error=f"{type(e).__name__}: {e}")
