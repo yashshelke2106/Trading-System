@@ -1,5 +1,10 @@
 # F&O Signal Terminal
 
+[![tests](https://github.com/yashshelke2106/Trading-System/actions/workflows/tests.yml/badge.svg)](https://github.com/yashshelke2106/Trading-System/actions/workflows/tests.yml)
+[![python](https://img.shields.io/badge/python-3.12-blue)](https://www.python.org/)
+[![license](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+[![paper trade](https://img.shields.io/badge/mode-PAPER__TRADE-orange)](#honest-status)
+
 A research-first NSE Futures & Options signal system for the Indian market —
 scanner, backtest harness, risk engine, options tooling, and a live signal
 dashboard. Built as a personal quant desk: it generates and *validates* trading
@@ -41,6 +46,8 @@ Full command reference lives in [`README_RUN.md`](README_RUN.md).
 
 ```bat
 REM one-time setup
+copy config.example.py config.py   REM local config; gitignored, never committed
+pip install -r requirements.txt
 python setup_dhan_keys.py          REM enter Dhan keys (Trading + Data API)
 cd trading-ui && npm install && cd ..
 
@@ -141,6 +148,21 @@ This project's research history is deliberately recorded, including the negative
 - `config.py` → `PAPER_TRADE` — must stay `True` unless deliberately going live.
 - `core/risk_engine.py` daily-loss formula — it's a **ratio** (P&L / capital), not raw rupee.
 - `core/execution.py` direction map — long → BUY, short → SELL for the Dhan API.
+
+---
+
+## Tests
+
+```bash
+pip install pytest && python -m pytest tests/ -q
+```
+
+192 tests, ~3s. CI runs the same suite on every push against `config.example.py`
+and asserts `PAPER_TRADE is True`.
+
+## License
+
+[MIT](LICENSE) — with an explicit not-investment-advice clause.
 
 ---
 
