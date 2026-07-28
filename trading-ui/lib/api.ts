@@ -46,6 +46,7 @@ export const fetchVerdict       = ()                => apiFetch("/api/verdict")
 export const fetchCapture       = ()                => apiFetch("/api/capture")
 export const fetchMarketState   = ()                => apiFetch("/api/market-state")
 export const fetchStats         = ()                => apiFetch("/api/stats")
+export const fetchLearningRules = ()                => apiFetch("/api/learning-rules")
 export const fetchIntelligence  = ()                => apiFetch("/api/intelligence")
 export const fetchLearning      = ()                => apiFetch("/api/learning")
 

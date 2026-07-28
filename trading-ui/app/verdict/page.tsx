@@ -7,7 +7,9 @@
 // Swing detail lives in /swing, allocation in /allocation — this page is the
 // summary that says which of those are worth opening.
 import { useEffect, useState, useCallback } from "react"
-import { fetchVerdict, fetchCapture, fetchMarketState, fetchStats } from "@/lib/api"
+import {
+  fetchVerdict, fetchCapture, fetchMarketState, fetchStats, fetchLearningRules,
+} from "@/lib/api"
 
 function fmt(n: number | null | undefined, dec = 2) {
   if (n == null || Number.isNaN(n)) return "—"
@@ -97,23 +99,49 @@ interface MarketStateData {
   limitation?: string
   error?: string
 }
+interface GuardRule {
+  feature: string; value: string
+  holdout_lossrate?: number; baseline?: number
+}
+interface BoostRule {
+  feature: string; value: string; boost: number
+  holdout_winrate?: number; baseline?: number
+}
+interface Recurrence {
+  kind: string; key: string; post_n: number
+  post_rate?: number | null; verdict: string; detail?: string
+}
+interface LearningRules {
+  guards?: GuardRule[]
+  boosts?: BoostRule[]
+  recurrence?: Recurrence[]
+  retired?: Record<string, unknown>[]
+  ledger?: {
+    mistake?: { promote?: number; reject?: number }
+    keeper?: { promote?: number; reject?: number }
+  }
+  error?: string
+}
 
 export default function VerdictPage() {
   const [v, setV] = useState<VerdictData | null>(null)
   const [cap, setCap] = useState<CaptureData | null>(null)
   const [ms, setMs] = useState<MarketStateData | null>(null)
   const [stats, setStats] = useState<Record<string, unknown> | null>(null)
+  const [rules, setRules] = useState<LearningRules | null>(null)
   const [err, setErr] = useState<string | null>(null)
 
   const load = useCallback(async () => {
     try {
-      const [vd, cd, md, sd] = await Promise.allSettled([
+      const [vd, cd, md, sd, rd] = await Promise.allSettled([
         fetchVerdict(), fetchCapture(), fetchMarketState(), fetchStats(),
+        fetchLearningRules(),
       ])
       if (vd.status === "fulfilled") setV(vd.value); else setErr(String(vd.reason))
       if (cd.status === "fulfilled") setCap(cd.value)
       if (md.status === "fulfilled") setMs(md.value)
       if (sd.status === "fulfilled") setStats(sd.value)
+      if (rd.status === "fulfilled") setRules(rd.value)
     } catch (e) {
       setErr(String(e))
     }
@@ -197,6 +225,67 @@ export default function VerdictPage() {
           New ideas enter here BEFORE code. Re-proposing a rejected hunt with new
           parameters is the failure mode this table exists to stop.
         </p>
+      </section>
+
+      <section style={CARD}>
+        <div style={H2}>What the system taught itself — and whether it held</div>
+        {(!rules || (!rules.guards?.length && !rules.boosts?.length)) ? (
+          <p style={{ color: "var(--txd)", fontSize: ".8em" }}>
+            No active rules yet. The learners promote one only after a temporal
+            holdout, a recurrence check and Bonferroni correction.
+          </p>
+        ) : (
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead><tr>
+              <th style={TH}>Kind</th><th style={TH}>Rule</th>
+              <th style={TH}>Effect at promotion</th>
+              <th style={TH}>Post-deploy</th><th style={TH}>Verdict</th>
+            </tr></thead>
+            <tbody>
+              {(rules.guards ?? []).map(g => {
+                const key = `${g.feature}=${g.value}`
+                const rec = (rules.recurrence ?? []).find(r => r.key === key && r.kind === "guard")
+                return (
+                  <tr key={`g-${key}`}>
+                    <td style={{ ...TD, color: RED }}>avoid</td>
+                    <td style={TD}>{key}</td>
+                    <td style={TD}>loss {fmt((g.holdout_lossrate ?? 0) * 100, 0)}% vs base {fmt((g.baseline ?? 0) * 100, 0)}%</td>
+                    <td style={TD}>{rec ? `n=${rec.post_n}` : "—"}</td>
+                    <td style={TD}><Chip v={rec?.verdict ?? "PENDING"} /></td>
+                  </tr>
+                )
+              })}
+              {(rules.boosts ?? []).map(b => {
+                const key = `${b.feature}=${b.value}`
+                const rec = (rules.recurrence ?? []).find(r => r.key === key && r.kind === "keeper")
+                return (
+                  <tr key={`b-${key}`}>
+                    <td style={{ ...TD, color: GREEN }}>prefer</td>
+                    <td style={TD}>{key} <span style={{ color: "var(--txd)" }}>×{b.boost}</span></td>
+                    <td style={TD}>win {fmt((b.holdout_winrate ?? 0) * 100, 0)}% vs base {fmt((b.baseline ?? 0) * 100, 0)}%</td>
+                    <td style={TD}>{rec ? `n=${rec.post_n}` : "—"}</td>
+                    <td style={TD}><Chip v={rec?.verdict ?? "PENDING"} /></td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        )}
+        <p style={{ color: "var(--txd)", fontSize: ".76em", marginTop: 10 }}>
+          <b style={{ color: AMBER }}>UNOBSERVABLE</b> is not success: a guard that
+          stopped its own trades produced no evidence — obeyed, not proven.{" "}
+          <b>UNPROVEN</b> = too few post-deploy trades yet. <b>REVERTED</b> rules are
+          auto-retired and never re-proposed.
+        </p>
+        {rules?.ledger && (
+          <p style={{ color: "var(--txd)", fontSize: ".76em", marginTop: 6 }}>
+            mined vs kept — avoid: {rules.ledger.mistake?.promote ?? 0} promoted /
+            {" "}{rules.ledger.mistake?.reject ?? 0} rejected · prefer:{" "}
+            {rules.ledger.keeper?.promote ?? 0} promoted /{" "}
+            {rules.ledger.keeper?.reject ?? 0} rejected
+            {rules.retired?.length ? ` · ${rules.retired.length} retired after deployment` : ""}
+          </p>
+        )}
       </section>
 
       <section style={CARD}>

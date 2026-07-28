@@ -646,11 +646,55 @@ async def get_accuracy():
 
 # ── Path-#1 allocation (equity-premium strategy) ──────────────────────────────
 
+# Shape written by allocation_task.build_status(). Mirrored here so the key is
+# ALWAYS present on the wire: a missing key reads as `undefined` in the UI,
+# which is indistinguishable from "fresh" — the exact blind spot this closes.
+_DQ_FIELDS = ("checked", "feed_ok", "last_bar", "age_days", "bars_added",
+              "stale", "error")
+
+
+def _normalize_data_quality(status: Dict[str, Any]) -> Dict[str, Any]:
+    """Guarantee a full `data_quality` block on an allocation payload.
+
+    Three distinct outcomes the UI must be able to tell apart:
+      stale=True   feed is dead or bars are too old -> target is NOT current
+      stale=False  verified fresh
+      stale=None   never checked (legacy state file, or refresh=False with no
+                   cache) -> unverified, which is not the same as fresh
+    """
+    dq = status.get("data_quality")
+    if not isinstance(dq, dict):
+        dq = {"checked": False, "error": "state file predates data_quality "
+                                        "reporting - freshness unverified"}
+    out = {k: dq.get(k) for k in _DQ_FIELDS}
+    if not out.get("checked"):
+        out["stale"] = None          # unknown, never a bare False
+    else:
+        out["stale"] = bool(out.get("stale"))
+    status["data_quality"] = out
+    return out
+
+
+def _stale_alert_text(dq: Dict[str, Any]) -> str:
+    return (f"STALE DATA: NIFTY cache last bar {dq.get('last_bar')} "
+            f"({dq.get('age_days')}d old), feed_ok={dq.get('feed_ok')}"
+            + (f" - {dq['error']}" if dq.get("error") else "")
+            + ". The target shown is computed from OLD prices and is NOT "
+              "current. Do NOT rebalance on it; fix the feed and re-run.")
+
+
 @app.get("/api/allocation")
 async def get_allocation(refresh: bool = False):
     """Path-#1 readout: today's target allocation + honest backtest + accuracy
     by holding horizon. Serves logs/allocation_state.json when fresh (written by
-    allocation_task.py); recomputes when missing/stale or ?refresh=true."""
+    allocation_task.py); recomputes when missing/stale or ?refresh=true.
+
+    `data_quality` rides along on every response — including the error path.
+    Note the two independent notions of freshness: the state *file* mtime (is
+    the JSON recent?) and `data_quality` (were the PRICES it was computed from
+    recent?). A file rewritten a minute ago from a dead feed passes the first
+    and fails the second, so the second is what the dashboard must show.
+    """
     def _load():
         from allocation_task import STATE_FILE, ALERT_FILE, build_status
 
@@ -663,10 +707,17 @@ async def get_allocation(refresh: bool = False):
         if status is None:
             status = build_status(refresh=refresh)
 
+        dq = _normalize_data_quality(status)
+
         alert = None
         if os.path.exists(ALERT_FILE):
             with open(ALERT_FILE, encoding="utf-8") as f:
                 alert = f.read().strip()
+        # allocation_task writes this alert itself, but the API can serve a
+        # stale state the task never got to write for (hand-run, crash between
+        # state and alert write). Synthesise rather than render an empty banner.
+        if dq.get("stale") and not alert:
+            alert = _stale_alert_text(dq)
         status["alert"] = alert
         return status
 
@@ -674,7 +725,8 @@ async def get_allocation(refresh: bool = False):
         return await _run(_load)
     except Exception as e:
         return {"targets": {}, "backtest": {}, "horizon_accuracy": {},
-                "alert": None, "error": str(e)}
+                "alert": None, "error": str(e),
+                "data_quality": _normalize_data_quality({})}
 
 
 # ── Dhan live probe (validity, not presence) ────────────────────────────────
@@ -772,6 +824,92 @@ async def dhan_live_status(refresh: bool = False):
         return {"working": False, "status": "timeout", "message": str(e)}
     except Exception as e:
         return {"working": False, "status": "error", "message": str(e)}
+
+
+# ── Learning rules (what the system taught itself, and whether it held) ─────
+
+@app.get("/api/learning-rules")
+async def get_learning_rules():
+    """Active mistake guards + keeper boosts, each with its post-deploy verdict.
+
+    Surfaces the closed learn loop: what was learned, what survived deployment,
+    and what was retired. The UNOBSERVABLE verdict is deliberately distinct
+    from CONFIRMED — a guard that stopped its own trades produced no evidence,
+    and silence must never render as success.
+    """
+    def _load():
+        out: Dict[str, Any] = {}
+        try:
+            from core.mistake_learner import load_guards
+            out["guards"] = load_guards()
+        except Exception as e:
+            out["guards"] = []
+            out["guards_error"] = str(e)
+        try:
+            from core.keeper_learner import load_boosts
+            out["boosts"] = load_boosts()
+        except Exception as e:
+            out["boosts"] = []
+            out["boosts_error"] = str(e)
+
+        # Post-deployment verdicts (read-only here; enforcement runs in EOD).
+        try:
+            from core.rule_recurrence import evaluate
+            out["recurrence"] = [v.to_dict() for v in evaluate()]
+        except Exception as e:
+            out["recurrence"] = []
+            out["recurrence_error"] = str(e)
+
+        # Retirement history — rules the system disproved and dropped.
+        retired = []
+        rpath = Path("logs/rule_retirements.jsonl")
+        if rpath.exists():
+            try:
+                with open(rpath, encoding="utf-8") as fh:
+                    for line in fh:
+                        line = line.strip()
+                        if line:
+                            retired.append(json.loads(line))
+            except Exception:
+                pass
+        out["retired"] = retired[-20:]
+
+        # Ledger tallies: how much was mined vs how little survived.
+        def _tally(p: str) -> Dict[str, int]:
+            t = {"promote": 0, "reject": 0}
+            fp = Path(p)
+            if fp.exists():
+                try:
+                    with open(fp, encoding="utf-8") as fh:
+                        for line in fh:
+                            line = line.strip()
+                            if not line:
+                                continue
+                            d = json.loads(line).get("decision")
+                            if d in t:
+                                t[d] += 1
+                except Exception:
+                    pass
+            return t
+
+        out["ledger"] = {
+            "mistake": _tally("logs/mistake_ledger.jsonl"),
+            "keeper": _tally("logs/keeper_ledger.jsonl"),
+        }
+        out["note"] = (
+            "Rules are promoted only after a temporal holdout, a recurrence "
+            "check and Bonferroni correction — then re-judged on trades "
+            "resolved AFTER deployment. UNOBSERVABLE means a guard suppressed "
+            "its own evidence: obeyed, not proven."
+        )
+        return out
+
+    try:
+        return await _run(lambda: _cached("learnrules", 120, _load))
+    except RunTimeout as e:
+        return {"guards": [], "boosts": [], "recurrence": [], "error": str(e)}
+    except Exception as e:
+        return {"guards": [], "boosts": [], "recurrence": [], "error": str(e)}
 
 
 # ── Strategy verdict (the "is it good or does it need upgrade" answer) ──────
