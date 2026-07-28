@@ -142,6 +142,23 @@ def run_eod(quiet: bool = False) -> dict:
         summary["keeper_learner"] = {"error": str(e)}
         log.warning(f"[EOD] keeper learner failed: {e}")
 
+    # ── 2d. Recurrence check — retire rules that stopped working ──────
+    # Runs AFTER both learners so it judges the rule set they just wrote.
+    # Only REVERTED rules are retired; UNPROVEN/UNOBSERVABLE are left alone.
+    try:
+        from core.rule_recurrence import evaluate as rec_eval, enforce as rec_enforce
+        verdicts = rec_eval()
+        res = rec_enforce(verdicts)
+        summary["rule_recurrence"] = {
+            "evaluated": res["evaluated"], "confirmed": res["confirmed"],
+            "unproven": res["unproven"], "unobservable": res["unobservable"],
+            "retired": res["retired_guards"] + res["retired_keepers"],
+            "retired_keys": res["retired_keys"],
+        }
+    except Exception as e:
+        summary["rule_recurrence"] = {"error": str(e)}
+        log.warning(f"[EOD] recurrence check failed: {e}")
+
     # ── 3. Recalibrate score→P(win) on the resolved set ──────────────
     try:
         from core.calibrator import get_calibrator
