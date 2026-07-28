@@ -114,6 +114,20 @@ def run_eod(quiet: bool = False) -> dict:
         summary["learner"] = {"error": str(e)}
         log.warning(f"[EOD] learner failed: {e}")
 
+    # ── 2b. Mistake learner — mine + holdout/selection-validate loss guards ──
+    try:
+        from core.mistake_learner import learn as mistake_learn
+        m = mistake_learn(verbose=False)
+        summary["mistake_learner"] = {
+            "candidates": m.get("candidates", 0),
+            "promoted": m.get("promoted", 0),
+            "guards": m.get("guards", []),
+            "baseline_lossrate": m.get("baseline_lossrate"),
+        } if m.get("ok") else {"skipped": m.get("reason")}
+    except Exception as e:
+        summary["mistake_learner"] = {"error": str(e)}
+        log.warning(f"[EOD] mistake learner failed: {e}")
+
     # ── 3. Recalibrate score→P(win) on the resolved set ──────────────
     try:
         from core.calibrator import get_calibrator

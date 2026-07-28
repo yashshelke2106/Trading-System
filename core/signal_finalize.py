@@ -198,11 +198,32 @@ def finalize_and_select(signals: List[Dict]) -> List[Dict]:
     filtered = []
     hour_blocked = 0
     regime_blocked = 0
+    mistake_blocked = 0
     now_hour = datetime.now().hour
+
+    # Validated mistake guards (core.mistake_learner): holdout- and
+    # selection-tested loss-signatures. Advisory, loaded once per scan. Unlike
+    # raw win-rate skips, each rule survived a temporal holdout + Bonferroni,
+    # so this cannot curve-fit the last few losers.
+    try:
+        from core.mistake_learner import load_guards as _load_mistake_guards
+        _mistake_guards = _load_mistake_guards()
+    except Exception:
+        _mistake_guards = []
 
     for s in signals:
         is_setup = bool(s.get("setup_name") and
                         s.get("setup_type") in ("mega_winner", "high_wr"))
+
+        # Mistake guard: skip signals matching a validated loss-signature
+        # (setup-matched signals are exempt — they have their own evidence).
+        if _mistake_guards and not is_setup:
+            from core.mistake_learner import should_skip as _mistake_skip
+            skip, why = _mistake_skip(s)
+            if skip:
+                mistake_blocked += 1
+                log.debug(f"[finalize] mistake-guard skip {s.get('symbol')}: {why}")
+                continue
 
         # Hour block: death hours (12, 14) unless setup-matched
         if now_hour in DEATH_HOURS and not is_setup:
@@ -250,6 +271,8 @@ def finalize_and_select(signals: List[Dict]) -> List[Dict]:
         log.info(f"[HourBlock] {hour_blocked} signals blocked (death hour {now_hour})")
     if regime_blocked:
         log.info(f"[Regime] {regime_blocked} signals blocked in {regime} regime")
+    if mistake_blocked:
+        log.info(f"[MistakeGuard] {mistake_blocked} signals blocked (validated loss-signatures)")
     if pre_count > len(filtered):
         log.info(f"[PreFilter] {pre_count} -> {len(filtered)} "
                  f"(conflict/vol/hour/regime dropped {pre_count - len(filtered)})")
