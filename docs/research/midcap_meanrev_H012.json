@@ -1,0 +1,87 @@
+{
+  "overall": {
+    "label": "all",
+    "n": 13091,
+    "indep_dates": 1642,
+    "avg_cost_pct": 2.382,
+    "gross_mean_pct": -0.1645,
+    "net_mean_pct": -2.5558,
+    "gross_t": -1.788,
+    "net_t": -26.937,
+    "win_rate": 0.319,
+    "gross_pf": 0.882,
+    "net_pf": 0.265
+  },
+  "tiers": [
+    {
+      "label": "largecap_liquid",
+      "n": 90,
+      "indep_dates": 88,
+      "avg_cost_pct": 0.2,
+      "gross_mean_pct": -0.4015,
+      "net_mean_pct": -0.6015,
+      "gross_t": -0.44,
+      "net_t": -0.659,
+      "win_rate": 0.589,
+      "gross_pf": 0.81,
+      "net_pf": 0.753
+    },
+    {
+      "label": "midcap",
+      "n": 2861,
+      "indep_dates": 1047,
+      "avg_cost_pct": 1.0,
+      "gross_mean_pct": -0.3433,
+      "net_mean_pct": -1.3433,
+      "gross_t": -2.438,
+      "net_t": -9.539,
+      "win_rate": 0.458,
+      "gross_pf": 0.91,
+      "net_pf": 0.539
+    },
+    {
+      "label": "midcap_liquid",
+      "n": 624,
+      "indep_dates": 432,
+      "avg_cost_pct": 0.5,
+      "gross_mean_pct": -0.0527,
+      "net_mean_pct": -0.5527,
+      "gross_t": -0.188,
+      "net_t": -1.972,
+      "win_rate": 0.498,
+      "gross_pf": 0.996,
+      "net_pf": 0.792
+    },
+    {
+      "label": "smallmid_illiquid",
+      "n": 5038,
+      "indep_dates": 1319,
+      "avg_cost_pct": 2.0,
+      "gross_mean_pct": -0.1042,
+      "net_mean_pct": -2.1042,
+      "gross_t": -0.919,
+      "net_t": -18.554,
+      "win_rate": 0.349,
+      "gross_pf": 0.927,
+      "net_pf": 0.31
+    },
+    {
+      "label": "very_illiquid_smallcap",
+      "n": 4478,
+      "indep_dates": 1243,
+      "avg_cost_pct": 4.0,
+      "gross_mean_pct": -0.3537,
+      "net_mean_pct": -4.3537,
+      "gross_t": -2.993,
+      "net_t": -36.832,
+      "win_rate": 0.166,
+      "gross_pf": 0.807,
+      "net_pf": 0.098
+    }
+  ],
+  "trades": 13091,
+  "window": [
+    "2019-01-01",
+    "2021-12-31"
+  ]
+}
