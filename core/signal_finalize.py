@@ -322,9 +322,33 @@ def finalize_and_select(signals: List[Dict]) -> List[Dict]:
         if e >= MIN_EXPECTANCY_R:
             kept.append((s, e))
 
+    # Keeper boosts (core.keeper_learner): validated WIN-signatures earn a
+    # gentle size/rank lean. Applied ONLY here, AFTER the expectancy gate — a
+    # boost must never push a signal past the gate, only reorder/size ones that
+    # already passed. That firewall is what keeps "size up what works" from
+    # becoming "lower the bar".
+    try:
+        from core.keeper_learner import confidence_boost as _keeper_boost
+    except Exception:
+        _keeper_boost = None
+
+    boosted = 0
+    ranked = []
     for s, e in kept:
-        s["reason"] = f"{s.get('reason','')} | E={e:+.2f}R p={s['calibrated_prob']:.0%}"
+        mult, why = (_keeper_boost(s) if _keeper_boost else (1.0, ""))
+        s["keeper_boost"] = mult          # consumed by the sizing layer
+        rank_val = e * mult               # ranking preference only
+        tag = ""
+        if mult > 1.0:
+            boosted += 1
+            tag = f" | keeper x{mult:.2f}"
+        s["reason"] = (f"{s.get('reason','')} | E={e:+.2f}R "
+                       f"p={s['calibrated_prob']:.0%}{tag}")
         s["regime"] = regime
+        ranked.append((s, rank_val))
+    if boosted:
+        log.info(f"[Keeper] {boosted} passed signals boosted (rank/size lean)")
+    kept = ranked
     kept.sort(key=lambda t: t[1], reverse=True)
 
     # Sector correlation cap: max MAX_PER_SECTOR signals from same sector

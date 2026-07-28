@@ -128,6 +128,20 @@ def run_eod(quiet: bool = False) -> dict:
         summary["mistake_learner"] = {"error": str(e)}
         log.warning(f"[EOD] mistake learner failed: {e}")
 
+    # ── 2c. Keeper learner — validated WIN-signature size/rank boosts ──
+    try:
+        from core.keeper_learner import learn as keeper_learn
+        k = keeper_learn(verbose=False)
+        summary["keeper_learner"] = {
+            "candidates": k.get("candidates", 0),
+            "promoted": k.get("promoted", 0),
+            "boosts": k.get("boosts", {}),
+            "baseline_winrate": k.get("baseline_winrate"),
+        } if k.get("ok") else {"skipped": k.get("reason")}
+    except Exception as e:
+        summary["keeper_learner"] = {"error": str(e)}
+        log.warning(f"[EOD] keeper learner failed: {e}")
+
     # ── 3. Recalibrate score→P(win) on the resolved set ──────────────
     try:
         from core.calibrator import get_calibrator
