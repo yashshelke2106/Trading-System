@@ -74,6 +74,12 @@ def validate_result(
     best_component_share: Optional[float] = None,   # 0..1, top name/pair share of PnL
     leverage: float = 1.0,
     max_drawdown_pct: Optional[float] = None,       # negative number, e.g. -18.0
+    # Deflated-Sharpe inputs (optional). When sharpe is per-observation and T is
+    # given, the result is deflated for having run n_hypotheses_tried trials.
+    dsr_T: Optional[int] = None,                     # number of observations
+    dsr_skew: float = 0.0,
+    dsr_kurt: float = 3.0,                            # non-excess: normal == 3
+    dsr_trial_sd: Optional[float] = None,            # SD of Sharpes across trials
     verbose: bool = True,
 ) -> "tuple[bool, List[Flag]]":
     """Auto-flag mechanical mirage/survival signatures. Returns (passed, flags)."""
@@ -107,6 +113,27 @@ def validate_result(
     if best_component_share is not None and best_component_share > 0.5:
         r.add(WARN, "A6", f"concentration: top component is {best_component_share:.0%}"
               " of PnL — use block/contiguous-subperiod deletion, not just LOO")
+
+    # --- selection-bias deflation (Deflated Sharpe Ratio) ---
+    # Bonferroni above corrects a p-value; DSR corrects the SHARPE for being
+    # the max of N trials, and additionally for sample length + non-normality.
+    # Applied only when the caller gives per-observation sharpe + T. RSI-2's
+    # analysis (2026-07-25) showed a t-test pass can sit on a knife-edge here.
+    if dsr_T is not None and n_hypotheses_tried:
+        try:
+            from core.deflated_sharpe import evaluate as _dsr_eval
+            v = _dsr_eval(sr_hat=sharpe, T=dsr_T, skew=dsr_skew, kurt=dsr_kurt,
+                          n_trials=n_hypotheses_tried, sr_trial_sd=dsr_trial_sd)
+            if not v.passes:
+                r.add(HARD, "A5-DSR", f"fails Deflated Sharpe: DSR {v.dsr:.3f} "
+                      f"(needs >0.95) vs best-of-{n_hypotheses_tried} null "
+                      f"SR0 {v.sr0_per_obs:.4f} >= SR {sharpe:.4f} — {v.note}")
+            elif dsr_trial_sd is None:
+                r.add(WARN, "A5-DSR", "DSR passed on the CONSERVATIVE default "
+                      "(trial-Sharpe SD = observed Sharpe). Measure the real "
+                      "trial dispersion — a smaller value is the honest input.")
+        except Exception as exc:
+            r.add(WARN, "A5-DSR", f"deflated-Sharpe check unavailable: {exc}")
 
     # --- survival signatures ---
     if leverage > 1.0 and sharpe < 1.0:
