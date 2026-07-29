@@ -80,9 +80,16 @@ OPTIONS_FRAC = 0.50
 # Wing widths to consider, narrowest first — the narrowest fundable one wins,
 # because a wider wing on a small account means no position at all.
 WING_CANDIDATES = [100, 200, 300, 500]
-# Typical net credit as a fraction of wing width for a ~1SD condor. Derived
-# from the H-014 harness, not guessed: credit/wing clustered near 0.30.
-CREDIT_FRAC = 0.30
+# LAST-RESORT fallback only. A flat credit/wing ratio is WRONG: the true ratio
+# falls as the wing widens (measured at NIFTY 24,261 / VIX 12.1: 29.0% at
+# 100pt, 26.4% at 200pt, 20.1% at 500pt) and it also moves with the vol regime.
+# Using a flat 0.30 UNDERSTATES max loss on wide wings by ~14% — understating
+# risk is the dangerous direction, so the planner prices the condor properly
+# with Black-Scholes off live NIFTY + India VIX and only falls back to this
+# constant when that data is unreachable (and says so when it does).
+CREDIT_FRAC_FALLBACK = 0.30
+CONDOR_DTE = 30                # days to expiry the sleeve targets
+SHORT_STRIKE_SD = 1.0          # short legs ~1 SD OTM (~16 delta)
 # Refuse any single position that would risk more than this share of its sleeve.
 MAX_SLEEVE_CONCENTRATION = 0.80
 
@@ -170,21 +177,85 @@ def plan_equity(capital: float) -> Dict:
 
 # ── Options sleeve ──────────────────────────────────────────────────────────
 
+def _ncdf(x: float) -> float:
+    return 0.5 * (1.0 + math.erf(x / math.sqrt(2.0)))
+
+
+def _bs_call(S: float, K: float, T: float, s: float, r: float = 0.0) -> float:
+    if T <= 0 or s <= 0:
+        return max(S - K, 0.0)
+    d1 = (math.log(S / K) + (r + s * s / 2) * T) / (s * math.sqrt(T))
+    return S * _ncdf(d1) - K * math.exp(-r * T) * _ncdf(d1 - s * math.sqrt(T))
+
+
+def _bs_put(S: float, K: float, T: float, s: float, r: float = 0.0) -> float:
+    if T <= 0 or s <= 0:
+        return max(K - S, 0.0)
+    d1 = (math.log(S / K) + (r + s * s / 2) * T) / (s * math.sqrt(T))
+    d2 = d1 - s * math.sqrt(T)
+    return K * math.exp(-r * T) * _ncdf(-d2) - S * _ncdf(-d1)
+
+
+def _live_nifty_vix() -> Optional[tuple]:
+    """(NIFTY spot, India VIX). None when unreachable."""
+    try:
+        import yfinance as yf
+        s = yf.Ticker("^NSEI").history(period="5d", interval="1d")
+        v = yf.Ticker("^INDIAVIX").history(period="5d", interval="1d")
+        if len(s) and len(v):
+            return float(s["Close"].iloc[-1]), float(v["Close"].iloc[-1])
+    except Exception:
+        pass
+    return None
+
+
+def condor_credit_points(wing: float, spot: float, vix: float,
+                         dte: int = CONDOR_DTE,
+                         sd_mult: float = SHORT_STRIKE_SD) -> float:
+    """Net credit (index points) for a ~1SD iron condor with `wing`-wide wings.
+
+    Priced properly rather than assumed: the credit/wing ratio is NOT constant
+    — it falls as the wing widens and rises with implied vol.
+    """
+    iv = vix / 100.0
+    T = dte / 365.0
+    sigma_pts = spot * iv * math.sqrt(T)
+    kc, kp = spot + sd_mult * sigma_pts, spot - sd_mult * sigma_pts
+    short_prem = _bs_call(spot, kc, T, iv) + _bs_put(spot, kp, T, iv)
+    long_prem = _bs_call(spot, kc + wing, T, iv) + _bs_put(spot, kp - wing, T, iv)
+    return max(short_prem - long_prem, 0.0)
+
+
 def plan_options(capital: float, lot: int = NIFTY_LOT) -> Dict:
     """Defined-risk short-premium sleeve, sized to what is actually fundable."""
     sleeve_cap = capital * OPTIONS_FRAC
     out: Dict = {"target_frac": OPTIONS_FRAC,
                  "sleeve_capital": round(sleeve_cap, 2),
                  "structure": "NIFTY iron condor (~1SD short strikes + wings)",
-                 "lot_size": lot}
+                 "lot_size": lot, "dte": CONDOR_DTE}
+
+    live = _live_nifty_vix()
+    if live:
+        spot, vix = live
+        out.update({"spot": round(spot, 2), "vix": round(vix, 2),
+                    "pricing": "black-scholes on live NIFTY + India VIX"})
+    else:
+        spot = vix = None
+        out["pricing"] = (f"FALLBACK flat credit/wing={CREDIT_FRAC_FALLBACK} "
+                          f"— live NIFTY/VIX unavailable; max loss on wide "
+                          f"wings may be UNDERSTATED")
 
     options = []
     for wing in WING_CANDIDATES:
-        credit = wing * CREDIT_FRAC
+        if spot and vix:
+            credit = condor_credit_points(wing, spot, vix)
+        else:
+            credit = wing * CREDIT_FRAC_FALLBACK
         max_loss = (wing - credit) * lot          # capital at risk per condor
         n = int(sleeve_cap // max_loss) if max_loss > 0 else 0
         options.append({"wing_points": wing,
                         "credit_points": round(credit, 1),
+                        "credit_frac_of_wing": round(credit / wing, 3),
                         "max_loss_per_lot": round(max_loss, 2),
                         "lots_affordable": n})
     out["ladder"] = options
@@ -282,10 +353,17 @@ def _print(p: BookPlan) -> None:
 
     o = p.options
     print(f"\nOPTIONS SLEEVE {o['target_frac']:.0%}  = Rs{o['sleeve_capital']:,.0f}")
-    print(f"  structure     : {o['structure']}  (lot {o['lot_size']})")
-    print(f"  {'wing':>6}{'credit':>9}{'max loss/lot':>15}{'lots':>7}")
+    print(f"  structure     : {o['structure']}  (lot {o['lot_size']}, "
+          f"{o.get('dte')}d)")
+    if o.get("spot"):
+        print(f"  priced on     : NIFTY {o['spot']:,.0f}, VIX {o['vix']:.2f} "
+              f"[{o['pricing']}]")
+    else:
+        print(f"  pricing       : {o['pricing']}")
+    print(f"  {'wing':>6}{'credit':>9}{'cr/wing':>9}{'max loss/lot':>15}{'lots':>7}")
     for row in o["ladder"]:
         print(f"  {row['wing_points']:>6}{row['credit_points']:>9.1f}"
+              f"{row.get('credit_frac_of_wing', 0):>8.1%}"
               f"{row['max_loss_per_lot']:>15,.0f}{row['lots_affordable']:>7}")
     if o.get("fundable"):
         c = o["chosen"]

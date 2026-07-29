@@ -24,12 +24,40 @@ from core import swing_book as sb
 # ── options sleeve sizing ───────────────────────────────────────────────────
 
 def test_ladder_max_loss_matches_formula():
-    """max loss = (wing - credit) * lot, credit = CREDIT_FRAC * wing."""
+    """max loss = (wing - credit) * lot, whatever the credit source.
+
+    Tolerance is the display rounding, not modelling slack: credit_points is
+    stored to 0.1 index points, so recomputing from it can drift by up to
+    0.05 * lot rupees.
+    """
     o = sb.plan_options(100_000)
+    tol = sb.NIFTY_LOT * 0.05 + 0.01
     for row in o["ladder"]:
-        w = row["wing_points"]
-        expect = (w - w * sb.CREDIT_FRAC) * sb.NIFTY_LOT
-        assert row["max_loss_per_lot"] == pytest.approx(expect, abs=0.01)
+        expect = (row["wing_points"] - row["credit_points"]) * sb.NIFTY_LOT
+        assert row["max_loss_per_lot"] == pytest.approx(expect, abs=tol)
+
+
+def test_credit_fraction_falls_as_wing_widens():
+    """The bug this replaced: a FLAT credit/wing understates max loss on wide
+    wings. Properly priced, the ratio must DECREASE with width."""
+    spot, vix = 24261.0, 12.13
+    fracs = [sb.condor_credit_points(w, spot, vix) / w
+             for w in (100, 200, 300, 500)]
+    assert fracs == sorted(fracs, reverse=True), fracs
+    assert fracs[0] > fracs[-1] * 1.2, "ratio should fall materially"
+
+
+def test_credit_rises_with_implied_vol():
+    lo = sb.condor_credit_points(200, 24261.0, 10.0)
+    hi = sb.condor_credit_points(200, 24261.0, 25.0)
+    assert hi > lo, "richer vol must pay a bigger credit"
+
+
+def test_credit_never_exceeds_wing():
+    """Credit >= wing would imply a risk-free condor — impossible."""
+    for vix in (8.0, 15.0, 40.0, 80.0):
+        for w in (100, 500):
+            assert sb.condor_credit_points(w, 24261.0, vix) < w
 
 
 def test_max_loss_is_monotone_in_wing_width():
@@ -58,8 +86,8 @@ def test_concentration_is_reported():
     o = sb.plan_options(15_000)          # Rs7,500 sleeve, one 100pt condor
     assert o["fundable"]
     assert 0 < o["sleeve_concentration"] <= 1.0
-    # 5250 / 7500 = 0.70
-    assert o["sleeve_concentration"] == pytest.approx(0.70, abs=0.01)
+    # ~5,300 / 7,500 -> around 0.71; exact value moves with live vol
+    assert 0.6 < o["sleeve_concentration"] < 0.85
 
 
 def test_single_lot_triggers_lumpiness_warning():
