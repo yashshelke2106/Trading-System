@@ -118,9 +118,17 @@ def sharpe(returns: Sequence[float]) -> float:
 # ── Core statistics ─────────────────────────────────────────────────────────
 
 def expected_max_sharpe(n_trials: int, sr_trial_sd: float) -> float:
-    """SR0: the Sharpe expected as the best of `n_trials` under the null."""
+    """SR0: the Sharpe expected as the best of `n_trials` under the null.
+
+    sr_trial_sd is a STANDARD DEVIATION and must be non-negative. A negative
+    value would flip the sign of SR0 and produce a benchmark BELOW zero, which
+    a losing strategy would then "beat" — see the guard in evaluate().
+    """
     if n_trials < 1:
         raise ValueError("n_trials >= 1")
+    if sr_trial_sd < 0:
+        raise ValueError(f"sr_trial_sd is a standard deviation, must be >= 0 "
+                         f"(got {sr_trial_sd})")
     if n_trials == 1:
         return 0.0
     a = _norm_ppf(1.0 - 1.0 / n_trials)
@@ -226,14 +234,23 @@ def evaluate(returns: Optional[Sequence[float]] = None, *,
         raise ValueError("supply returns, or sr_hat and T")
     skew = 0.0 if skew is None else skew
     kurt = 3.0 if kurt is None else kurt
-    sd_trials = sr_hat if sr_trial_sd is None else sr_trial_sd
+    # The default stand-in for trial dispersion is |SR̂|. The absolute value is
+    # essential: a negative observed Sharpe would otherwise yield a NEGATIVE
+    # SR0 benchmark, which the losing strategy then "beats" — certifying a
+    # money-loser as validated (measured: SR -0.05 scored DSR 0.999 before this
+    # guard). A standard deviation is never negative.
+    sd_trials = abs(sr_hat) if sr_trial_sd is None else abs(sr_trial_sd)
 
     sr0 = expected_max_sharpe(n_trials, sd_trials)
     dsr = deflated_sharpe(sr_hat, T, skew, kurt, sr0)
     trl = min_track_record_length(sr_hat, skew, kurt, sr_benchmark=sr0)
-    passes = (dsr == dsr) and dsr > dsr_threshold and sr_hat > sr0
+    # A strategy that loses money is never "validated", whatever the DSR says.
+    passes = ((dsr == dsr) and dsr > dsr_threshold
+              and sr_hat > sr0 and sr_hat > 0.0)
 
-    if passes:
+    if sr_hat <= 0.0:
+        note = f"SR {sr_hat:.4f} is not positive — nothing to validate"
+    elif passes:
         note = f"survives selection over {n_trials} trials (DSR {dsr:.3f})"
     elif sr_hat <= sr0:
         note = (f"SR {sr_hat:.4f} below the best-of-{n_trials} null "
