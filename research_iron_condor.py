@@ -80,15 +80,44 @@ def bs(S: float, K: float, T: float, sigma: float, call: bool, r: float = RISK_F
     return K * math.exp(-r * T) * _ncdf(-d2) - S * _ncdf(-d1)
 
 
+# yfinance tickers for the two series this harness needs. The Dhan Data API
+# subscription has expired (all /v2/charts/* return 401), so without this
+# fallback the whole VRP gate is unrunnable. yfinance carries India VIX back to
+# 2008 — DEEPER history than the Dhan path had, which is a strict improvement
+# for a study whose entire risk lives in the crash tail (2008, 2020 both in).
+_YF_FALLBACK = {"INDIAVIX": "^INDIAVIX", "NIFTY": "^NSEI"}
+
+
 def _series(symbol: str, days: int):
-    from core.api_dhan import dhan_daily
-    d = dhan_daily(symbol, days_back=days)
-    if d is None or d.empty:
+    # Primary: Dhan.
+    try:
+        from core.api_dhan import dhan_daily
+        d = dhan_daily(symbol, days_back=days)
+        if d is not None and not d.empty:
+            d = d.copy(); d.columns = [c.lower() for c in d.columns]
+            d["date"] = pd.to_datetime(d["date"]).dt.normalize()
+            s = d.set_index("date")["close"]
+            return s[~s.index.duplicated(keep="last")].sort_index()
+    except Exception:
+        pass
+
+    # Fallback: yfinance.
+    tk = _YF_FALLBACK.get(symbol.upper())
+    if not tk:
         return None
-    d = d.copy(); d.columns = [c.lower() for c in d.columns]
-    d["date"] = pd.to_datetime(d["date"]).dt.normalize()
-    s = d.set_index("date")["close"]
-    return s[~s.index.duplicated(keep="last")].sort_index()
+    try:
+        import ssl
+        ssl._create_default_https_context = ssl._create_unverified_context
+        import yfinance as yf
+        raw = yf.Ticker(tk).history(period="max", interval="1d")
+        if raw is None or raw.empty:
+            return None
+        s = raw["Close"].copy()
+        s.index = pd.to_datetime(s.index).tz_localize(None).normalize()
+        s = s[~s.index.duplicated(keep="last")].sort_index()
+        return s.tail(days) if days else s
+    except Exception:
+        return None
 
 
 def newey_west_se(x: np.ndarray, lag: int) -> float:
