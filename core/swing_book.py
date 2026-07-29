@@ -92,6 +92,14 @@ CONDOR_DTE = 30                # days to expiry the sleeve targets
 SHORT_STRIKE_SD = 1.0          # short legs ~1 SD OTM (~16 delta)
 # Refuse any single position that would risk more than this share of its sleeve.
 MAX_SLEEVE_CONCENTRATION = 0.80
+# Hard cap on how much of the options sleeve may be at risk SIMULTANEOUSLY.
+# Stacking N lots at the same strikes on the same index is not N positions —
+# it is one position levered N times, and they all resolve on the same day.
+# Capping deployment keeps a bad month survivable and leaves powder to ladder.
+MAX_SLEEVE_DEPLOYED = 0.60
+# Condors are diversified across TIME, not across lots: entering tranches on
+# different dates/expiries decorrelates outcomes. One tranche per ~10 days.
+LADDER_TRANCHES = 3
 
 
 @dataclass
@@ -275,25 +283,58 @@ def plan_options(capital: float, lot: int = NIFTY_LOT) -> Dict:
 
     # Narrowest fundable wing, so the sleeve can hold a position at all.
     pick = fundable[0]
-    at_risk = pick["max_loss_per_lot"] * pick["lots_affordable"]
+
+    # Cap SIMULTANEOUS risk. lots_affordable is what the sleeve could fund if
+    # it emptied itself into one strike on one expiry — never the right size.
+    budget = sleeve_cap * MAX_SLEEVE_DEPLOYED
+    lots = int(budget // pick["max_loss_per_lot"])
+    capped = lots < pick["lots_affordable"]
+    if lots < 1:
+        # Budget too tight for the capped size, but one lot IS fundable.
+        # Allow exactly one and let the concentration warning speak.
+        lots = 1
+
+    at_risk = pick["max_loss_per_lot"] * lots
     concentration = at_risk / sleeve_cap if sleeve_cap else 1.0
+
+    # Ladder across time — the only real diversification a condor sleeve has.
+    tranches = min(LADDER_TRANCHES, lots)
+    per_tranche = lots // tranches if tranches else 0
+    remainder = lots - per_tranche * tranches if tranches else 0
+    ladder_plan = [per_tranche + (1 if i < remainder else 0)
+                   for i in range(tranches)]
+
     out.update({
         "fundable": True,
         "chosen": pick,
-        "lots": pick["lots_affordable"],
+        "lots": lots,
+        "lots_if_uncapped": pick["lots_affordable"],
+        "deployment_cap": MAX_SLEEVE_DEPLOYED,
         "capital_at_risk": round(at_risk, 2),
         "sleeve_concentration": round(concentration, 3),
-        "expected_credit": round(pick["credit_points"] * lot *
-                                 pick["lots_affordable"], 2),
+        "expected_credit": round(pick["credit_points"] * lot * lots, 2),
+        "ladder_tranches": ladder_plan,
+        "dry_powder": round(sleeve_cap - at_risk, 2),
     })
+
     warns = []
+    if capped:
+        warns.append(
+            f"sized to {lots} lot(s), not the {pick['lots_affordable']} the "
+            f"sleeve could fund: {MAX_SLEEVE_DEPLOYED:.0%} simultaneous-risk cap. "
+            f"Stacking lots at one strike is leverage, not diversification — "
+            f"they all resolve on the same day")
     if concentration > MAX_SLEEVE_CONCENTRATION:
         warns.append(
             f"single position holds {concentration:.0%} of the options sleeve "
             f"— no diversification; one bad month is the whole sleeve")
-    if pick["lots_affordable"] == 1:
-        warns.append("only ONE lot affordable: outcomes are lumpy and the "
-                     "measured +4.4%/trade average is meaningless at n=1/month")
+    if lots == 1:
+        warns.append("only ONE lot: outcomes are lumpy and the measured "
+                     "+4.4%/trade average is meaningless at n=1/month")
+    if len(ladder_plan) > 1:
+        warns.append(f"enter as {len(ladder_plan)} tranches ({ladder_plan}) "
+                     f"~10 days apart — time is this sleeve's only real "
+                     f"diversification")
     out["warnings"] = warns
     return out
 
@@ -367,10 +408,15 @@ def _print(p: BookPlan) -> None:
               f"{row['max_loss_per_lot']:>15,.0f}{row['lots_affordable']:>7}")
     if o.get("fundable"):
         c = o["chosen"]
-        print(f"  -> SELL {o['lots']} condor(s), {c['wing_points']}pt wings")
+        print(f"  -> SELL {o['lots']} condor(s), {c['wing_points']}pt wings"
+              + (f"  (capped from {o['lots_if_uncapped']})"
+                 if o.get("lots_if_uncapped", 0) > o["lots"] else ""))
         print(f"     capital at risk Rs{o['capital_at_risk']:,.0f} "
               f"({o['sleeve_concentration']:.0%} of sleeve), "
-              f"credit ~Rs{o['expected_credit']:,.0f}")
+              f"credit ~Rs{o['expected_credit']:,.0f}, "
+              f"dry powder Rs{o.get('dry_powder', 0):,.0f}")
+        if len(o.get("ladder_tranches", [])) > 1:
+            print(f"     ladder: {o['ladder_tranches']} lots, ~10 days apart")
     else:
         print(f"  -> NOT FUNDABLE: {o.get('reason')}")
 

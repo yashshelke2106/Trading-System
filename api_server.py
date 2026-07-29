@@ -826,6 +826,38 @@ async def dhan_live_status(refresh: bool = False):
         return {"working": False, "status": "error", "message": str(e)}
 
 
+@app.get("/api/paper-book")
+async def get_paper_book():
+    """Forward paper run of the 50/50 swing book.
+
+    Always returns `confidence` alongside P&L. A month of data is n~1 on the
+    options sleeve and cannot say whether the system works — the field exists
+    so a green month is never read as validation.
+    """
+    def _load():
+        out: Dict[str, Any] = {}
+        try:
+            from core.paper_book import status as pb_status
+            out["status"] = pb_status()
+        except Exception as e:
+            out["status"] = {"ok": False, "reason": str(e)}
+        try:
+            from core.swing_book import plan as book_plan
+            st = out.get("status") or {}
+            cap = st.get("capital") or 100000.0
+            out["plan"] = book_plan(float(cap)).to_dict()
+        except Exception as e:
+            out["plan"] = {"error": str(e)}
+        return out
+
+    try:
+        return await _run(lambda: _cached("paperbook", 120, _load))
+    except RunTimeout as e:
+        return {"status": {"ok": False, "reason": str(e)}}
+    except Exception as e:
+        return {"status": {"ok": False, "reason": str(e)}}
+
+
 # ── Learning rules (what the system taught itself, and whether it held) ─────
 
 @app.get("/api/learning-rules")
