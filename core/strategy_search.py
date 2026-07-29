@@ -340,6 +340,30 @@ def search(target_wr: float = 0.70, cost_pct: float = 0.20,
         "search_end": str(pd.Timestamp(cut).date()),
     }
 
+    # Empirical trial-Sharpe dispersion across everything searched.
+    # This is the input the Deflated Sharpe gate needs and never had: the DSR
+    # analysis of RSI-2 (docs/research/deflated_sharpe_rsi2.md) showed its
+    # survival hinges entirely on the SD of Sharpes ACROSS TRIALS, which had to
+    # be guessed. A 2,700-config sweep over the same universe is a legitimate
+    # empirical estimate of "how dispersed are strategies someone might try".
+    trial_sharpes = []
+    for r in results:
+        p, rr_ = r.hit_rate, r.rr
+        mean_r = p * rr_ - (1 - p) * 1.0
+        var_r = p * (rr_ - mean_r) ** 2 + (1 - p) * (-1.0 - mean_r) ** 2
+        if var_r > 0:
+            trial_sharpes.append(mean_r / math.sqrt(var_r))
+    if trial_sharpes:
+        arr = np.array(trial_sharpes)
+        report["trial_sharpe_dist"] = {
+            "n": int(arr.size),
+            "sd": round(float(arr.std(ddof=1)), 5),
+            "mean": round(float(arr.mean()), 5),
+            "p05": round(float(np.percentile(arr, 5)), 5),
+            "p95": round(float(np.percentile(arr, 95)), 5),
+            "max": round(float(arr.max()), 5),
+        }
+
     # Best-effort context even when nothing qualifies.
     hit_only = [r for r in results if r.hits_target_wr]
     prof_only = [r for r in results if r.profitable]

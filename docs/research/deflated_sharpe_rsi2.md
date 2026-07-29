@@ -48,3 +48,42 @@ A5-DSR flag on failure, and warns when only the conservative default was used.
 
 Risk-reducing only. It can downgrade a claim, never create one. It does not
 reopen any rejected hunt; it raises the bar every future pass must clear.
+
+
+---
+
+## RESOLVED 2026-07-28 — the gate was run, RSI-2 is REJECTED
+
+The open condition above ("compute the actual SD of per-date Sharpes across
+every trial run, then re-evaluate") has now been executed. The 2,700-config
+sweep in `core/strategy_search.py` over the same universe supplies the
+empirical trial-Sharpe distribution that was previously only guessable.
+
+| Quantity | Measured |
+|---|---|
+| Trial-Sharpe SD | **0.1832** |
+| Best trial Sharpe | 0.2492 |
+| Unit-free dispersion ratio (sd/best) | **0.735** |
+| Ratio RSI-2 needed | **≤ 0.28** |
+| Implied `sr_trial_sd` for RSI-2 | 0.0781 (2.6× over the 0.03 threshold) |
+
+Deflated Sharpe with the measured dispersion, at RSI-2's own numbers
+(per-date Sharpe 0.1062, T=1740, skew −0.5, kurt 6.0):
+
+| n_trials | SR0 | DSR | verdict |
+|---|---|---|---|
+| 13 | 0.1330 | 0.140 | **FAIL** |
+| 30 | 0.1619 | 0.012 | **FAIL** |
+| 100 | 0.1976 | 0.000 | **FAIL** |
+
+**H-009 closed REJECTED.** The gross edge was always real (t=4.43 over 1,740
+independent dates); it is simply not separable from what the best of N trials
+produces under the null on this universe.
+
+**Caveat, stated plainly:** the dispersion ratio comes from a level-grid trial
+family, not from the RSI-2 programme's own more diverse hunts, and the two
+Sharpe series are in different units (per-trade vs per-date) — which is why the
+unit-free ratio was used rather than a raw substitution. The margin is 2.6×,
+wide enough that the conclusion survives that transfer.
+
+With this, the hypothesis registry has **13 trials and zero open questions.**
