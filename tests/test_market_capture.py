@@ -423,3 +423,58 @@ def test_repair_overwrites_recent_bars(tmp_cache, monkeypatch):
     r = ic.repair_symbol("TESTSYM", days=3)
     assert r["repaired"] == 3
     assert float(ic.read_symbol("TESTSYM")["close"].iloc[0]) == pytest.approx(2.0)
+
+
+# ── Regression: market_bias uses live data before synthetic ──────────────────
+
+def test_market_bias_falls_to_real_data_not_synthetic(monkeypatch):
+    """Dhan failure must reach the yfinance+live tier, not synthetic GBM.
+
+    Regression for the fabricated-bias bug: previously get_index_data went
+    Dhan -> synthetic with no real fallback, so an expired Dhan sub produced a
+    confident bias from noise.
+    """
+    from core.market_bias import MarketBiasEngine
+    import pandas as pd
+    import numpy as np
+
+    eng = MarketBiasEngine()
+    eng.cache.clear()
+
+    # Real daily frame (what the yfinance tier returns).
+    idx = pd.date_range(end="2026-07-29", periods=250, freq="B")
+    close = np.linspace(23000, 24250, 250)
+    frame = pd.DataFrame({"open": close, "high": close * 1.005,
+                          "low": close * 0.995, "close": close,
+                          "volume": np.full(250, 1e6),
+                          "date": idx})
+    monkeypatch.setattr(eng, "_yf_index_frame", lambda s, d: frame.tail(d))
+    # Live patch available and consistent.
+    import core.live_quotes as lq
+    monkeypatch.setattr(lq, "get_quote",
+                        lambda s: lq.Quote(s.upper(), 24249.0, "nse_live"))
+
+    df = eng.get_index_data("NIFTY", 250)
+    assert df.attrs.get("synthetic", False) is False
+    assert df.attrs.get("live_patched", False) is True
+    assert float(df["close"].iloc[-1]) == pytest.approx(24249.0)
+
+
+def test_live_patch_rejects_absurd_deviation(monkeypatch):
+    """A live value >10% off history is a source mismatch, not a move —
+    it must NOT overwrite the series."""
+    from core.market_bias import MarketBiasEngine
+    import pandas as pd
+    import numpy as np
+
+    eng = MarketBiasEngine()
+    idx = pd.date_range(end="2026-07-29", periods=60, freq="B")
+    close = np.full(60, 24000.0)
+    df = pd.DataFrame({"open": close, "high": close, "low": close,
+                       "close": close, "volume": np.full(60, 1e6), "date": idx})
+    import core.live_quotes as lq
+    monkeypatch.setattr(lq, "get_quote",
+                        lambda s: lq.Quote(s.upper(), 5000.0, "nse_live"))  # absurd
+    eng._patch_live_last("NIFTY", df)
+    assert float(df["close"].iloc[-1]) == 24000.0          # unchanged
+    assert not df.attrs.get("live_patched", False)

@@ -36,6 +36,49 @@ class MarketBiasEngine:
         self.bank_index = "BANKNIFTY"
         self.cache = {}  # symbol -> (timestamp, df)
 
+    # yfinance tickers for the indices this engine reads.
+    _YF_INDEX = {"NIFTY": "^NSEI", "BANKNIFTY": "^NSEBANK",
+                 "NIFTYIT": "^CNXIT", "INDIAVIX": "^INDIAVIX"}
+
+    def _yf_index_frame(self, symbol: str, days: int):
+        """Real daily OHLCV series from yfinance. Returns a Dhan-shaped frame
+        (columns: date, open, high, low, close, volume) or None."""
+        tk = self._YF_INDEX.get(symbol.upper())
+        if tk is None:
+            return None
+        import ssl
+        ssl._create_default_https_context = ssl._create_unverified_context
+        import yfinance as yf
+        raw = yf.Ticker(tk).history(period=f"{max(days + 20, 60)}d", interval="1d")
+        if raw is None or raw.empty:
+            return None
+        df = raw.rename(columns={"Open": "open", "High": "high", "Low": "low",
+                                 "Close": "close", "Volume": "volume"})
+        df = df[["open", "high", "low", "close", "volume"]].copy()
+        df["date"] = pd.to_datetime(df.index).tz_localize(None)
+        df = df.reset_index(drop=True).dropna(subset=["close"])
+        return df.tail(days) if days else df
+
+    def _patch_live_last(self, symbol: str, df) -> None:
+        """Overwrite the last close with the seconds-fresh NSE value, so the
+        trend reads today's live level rather than yfinance's ~3-min-old one.
+        Only patches when live and history agree on the day (never invents a
+        new bar). Silent no-op if live is unavailable."""
+        try:
+            from core.live_quotes import get_quote
+            q = get_quote(symbol)
+            if not q or q.source != "nse_live" or not q.last:
+                return
+            last = float(df["close"].iloc[-1])
+            # Sanity: reject a live value more than 10% off history — that is a
+            # symbol/source mismatch, not a real move, and must not corrupt the
+            # series.
+            if last > 0 and abs(q.last / last - 1) <= 0.10:
+                df.iloc[-1, df.columns.get_loc("close")] = q.last
+                df.attrs["live_patched"] = True
+        except Exception:
+            pass
+
     def get_index_data(self, symbol: str = "NIFTY", days: int = 50):
         entry = self.cache.get(symbol)
         if entry and time.time() - entry[0] < _INDEX_CACHE_TTL:
@@ -52,6 +95,23 @@ class MarketBiasEngine:
                 if df is not None and not df.empty:
                     self.cache[symbol] = (time.time(), df)
                     return df
+        except Exception:
+            pass
+
+        # ── Real fallback: yfinance daily history, last close patched live ──
+        # The trend needs a SERIES (200-DMA etc.), which a single live tick
+        # cannot supply — so history comes from yfinance daily, then the most
+        # recent close is overwritten with the seconds-fresh NSE value from
+        # core.live_quotes. This is the tier that was missing: previously Dhan
+        # failure fell straight to synthetic GBM, which is why an expired sub
+        # produced a fabricated bias. Only if BOTH history and live fail do we
+        # reach the synthetic block below.
+        try:
+            df = self._yf_index_frame(symbol, days)
+            if df is not None and not df.empty:
+                self._patch_live_last(symbol, df)
+                self.cache[symbol] = (time.time(), df)
+                return df
         except Exception:
             pass
 
