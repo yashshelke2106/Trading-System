@@ -105,6 +105,13 @@ def harvest(capital: float = 100000.0) -> dict:
     except Exception as e:
         out["book_error"] = str(e)
 
+    # 3b. Pre-registered proof vs benchmark — the "is it working" verdict.
+    try:
+        from core.proof import evaluate as proof_eval
+        out["proof"] = proof_eval().to_dict()
+    except Exception as e:
+        out["proof_error"] = str(e)
+
     # 4. Condor tranche reminder (time-laddered, not stacked).
     if op.get("fundable") and op.get("ladder_tranches"):
         out["condor_ladder"] = op["ladder_tranches"]
@@ -140,6 +147,14 @@ def _print(o: dict) -> None:
         print(f"\nPAPER BOOK  total P&L Rs{b['total_pnl']:,.2f} ({b['return_pct']:+.3f}%)"
               f"  day {b['days_running']}")
         print(f"  {b['confidence']}")
+
+    pr = o.get("proof") or {}
+    if pr.get("verdict"):
+        print(f"\nPROOF [{pr.get('checkpoint')}]  {pr['verdict']}")
+        if pr.get("benchmark_return_pct") is not None:
+            print(f"  book {pr['book_return_pct']:+.2f}% vs NIFTY "
+                  f"{pr['benchmark_return_pct']:+.2f}% (excess "
+                  f"{pr['excess_pct']:+.2f}%, capture {pr['capture_ratio']})")
 
     print("\nACTIONS:")
     if o["actions"]:
