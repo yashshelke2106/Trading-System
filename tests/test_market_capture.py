@@ -478,3 +478,59 @@ def test_live_patch_rejects_absurd_deviation(monkeypatch):
     eng._patch_live_last("NIFTY", df)
     assert float(df["close"].iloc[-1]) == 24000.0          # unchanged
     assert not df.attrs.get("live_patched", False)
+
+
+# ── paper_book entry logging ─────────────────────────────────────────────────
+
+def test_paper_enter_equity_reduces_cash(tmp_path, monkeypatch):
+    import core.paper_book as pb
+    monkeypatch.setattr(pb, "STATE_PATH", str(tmp_path / "s.json"))
+    monkeypatch.setattr(pb, "LEDGER_PATH", str(tmp_path / "l.jsonl"))
+    monkeypatch.setattr("core.swing_book.plan",
+                        lambda cap: type("P", (), {"to_dict": lambda self: {}})())
+    pb._save({"started": pb._now(), "capital": 100000.0, "cash": 100000.0,
+              "positions": [], "realised_pnl": 0.0})
+    r = pb.enter("equity", 90, 277.0)
+    assert r["ok"]
+    assert pb._load()["cash"] == pytest.approx(100000.0 - 90 * 277.0)
+
+
+def test_paper_enter_condor_adds_credit(tmp_path, monkeypatch):
+    import core.paper_book as pb
+    monkeypatch.setattr(pb, "STATE_PATH", str(tmp_path / "s.json"))
+    monkeypatch.setattr(pb, "LEDGER_PATH", str(tmp_path / "l.jsonl"))
+    pb._save({"started": pb._now(), "capital": 100000.0, "cash": 50000.0,
+              "positions": [], "realised_pnl": 0.0})
+    r = pb.enter("condor", 5, 2175.0,
+                 {"max_loss_per_lot": 5329.0, "capital_at_risk": 26645.0})
+    assert r["ok"]
+    assert pb._load()["cash"] == pytest.approx(50000.0 + 5 * 2175.0)
+
+
+def test_paper_enter_equity_rejects_overspend(tmp_path, monkeypatch):
+    import core.paper_book as pb
+    monkeypatch.setattr(pb, "STATE_PATH", str(tmp_path / "s.json"))
+    monkeypatch.setattr(pb, "LEDGER_PATH", str(tmp_path / "l.jsonl"))
+    pb._save({"started": pb._now(), "capital": 100000.0, "cash": 1000.0,
+              "positions": [], "realised_pnl": 0.0})
+    r = pb.enter("equity", 90, 277.0)      # needs ~25k, have 1k
+    assert not r["ok"] and "insufficient" in r["reason"]
+
+
+def test_enter_from_plan_no_double_equity(tmp_path, monkeypatch):
+    import core.paper_book as pb
+
+    class _Plan:
+        equity = {"fundable": True, "units": 90, "price": 277.0,
+                  "overlay_state": "risk_off"}
+        options = {"fundable": False}
+        def to_dict(self): return {}
+    monkeypatch.setattr(pb, "STATE_PATH", str(tmp_path / "s.json"))
+    monkeypatch.setattr(pb, "LEDGER_PATH", str(tmp_path / "l.jsonl"))
+    monkeypatch.setattr("core.swing_book.plan", lambda cap: _Plan())
+    pb._save({"started": pb._now(), "capital": 100000.0, "cash": 100000.0,
+              "positions": [], "realised_pnl": 0.0})
+    pb.enter_from_plan(equity=True)
+    pb.enter_from_plan(equity=True)         # second call must NOT re-enter
+    eq = [x for x in pb._load()["positions"] if x["kind"] == "equity"]
+    assert len(eq) == 1

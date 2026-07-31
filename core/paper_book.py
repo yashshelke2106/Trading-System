@@ -132,6 +132,96 @@ def start(capital: float, force: bool = False) -> Dict:
     return {"ok": True, "state": state, "plan": p.to_dict()}
 
 
+# ── Entry ─────────────────────────────────────────────────────────────────
+
+def enter(kind: str, qty: float, entry: float, detail: Optional[Dict] = None) -> Dict:
+    """Log ONE position into the open book. kind: 'equity' | 'condor'.
+
+    For equity, `entry` is price/unit and cash is reduced by qty*entry.
+    For a condor, `entry` is the net credit RECEIVED per lot; cash rises by the
+    credit and the capital-at-risk (max loss) is tracked in detail for honest
+    exposure accounting.
+    """
+    state = _load()
+    if not state:
+        return {"ok": False, "reason": "no paper book open — run --start first"}
+    detail = detail or {}
+
+    pos = {"kind": kind, "opened": _now(), "qty": float(qty),
+           "entry": float(entry), "detail": detail,
+           "closed": None, "exit": None, "pnl": None}
+
+    if kind == "equity":
+        cost = qty * entry
+        if cost > state.get("cash", 0) + 1e-6:
+            return {"ok": False, "reason": (f"insufficient cash: need "
+                    f"Rs{cost:,.0f}, have Rs{state.get('cash',0):,.0f}")}
+        state["cash"] -= cost
+    elif kind == "condor":
+        credit = qty * entry                 # entry = credit points * lot value
+        state["cash"] = state.get("cash", 0) + credit
+    else:
+        return {"ok": False, "reason": f"unknown kind '{kind}'"}
+
+    state.setdefault("positions", []).append(pos)
+    _save(state)
+    _append({"event": "enter", "kind": kind, "qty": qty, "entry": entry,
+             "detail": detail})
+    return {"ok": True, "position": pos, "cash": state["cash"]}
+
+
+def enter_from_plan(capital: Optional[float] = None,
+                    equity: bool = True, condor_lots: int = 0) -> Dict:
+    """Log the entries the swing_book currently prescribes — the honest way to
+    start the proof from what the system actually says to hold today.
+
+    equity: log the full equity-sleeve holding at the live price.
+    condor_lots: log THIS MANY condor lots now (the ladder is entered in
+      tranches over days, so you call this once per tranche, not all at once).
+    """
+    state = _load()
+    if not state:
+        return {"ok": False, "reason": "no paper book open — run --start first"}
+    cap = capital or state.get("capital", 100000.0)
+
+    from core.swing_book import plan as book_plan
+    p = book_plan(cap)
+    logged = []
+
+    if equity:
+        eq = p.equity
+        if eq.get("fundable") and eq.get("units", 0) >= 1:
+            # Skip if an equity position is already open (avoid double-entry).
+            if not any(x["kind"] == "equity" and not x.get("closed")
+                       for x in state.get("positions", [])):
+                r = enter("equity", eq["units"], eq["price"],
+                          {"instrument": "NIFTYBEES",
+                           "overlay_state": eq.get("overlay_state")})
+                if r.get("ok"):
+                    logged.append(f"equity: {eq['units']} NIFTYBEES @ {eq['price']}")
+                state = _load()
+
+    if condor_lots > 0:
+        op = p.options
+        if op.get("fundable"):
+            c = op["chosen"]
+            credit_per_lot = c["credit_points"] * op["lot_size"]
+            max_loss_per_lot = c["max_loss_per_lot"]
+            r = enter("condor", condor_lots, credit_per_lot,
+                      {"wing_points": c["wing_points"], "lot_size": op["lot_size"],
+                       "max_loss_per_lot": max_loss_per_lot,
+                       "capital_at_risk": max_loss_per_lot * condor_lots,
+                       "spot": op.get("spot"), "vix": op.get("vix"),
+                       "expiry_dte": op.get("dte")})
+            if r.get("ok"):
+                logged.append(f"condor: {condor_lots} lot(s) {c['wing_points']}pt "
+                              f"wings, credit Rs{credit_per_lot*condor_lots:,.0f}, "
+                              f"risk Rs{max_loss_per_lot*condor_lots:,.0f}")
+
+    return {"ok": True, "logged": logged or ["nothing new to enter"],
+            "cash": _load().get("cash")}
+
+
 # ── Marking ─────────────────────────────────────────────────────────────────
 
 def _nifty_bees() -> Optional[float]:
@@ -254,6 +344,10 @@ def main() -> int:
                     help="replace an existing open paper book")
     ap.add_argument("--mark", action="store_true")
     ap.add_argument("--status", action="store_true")
+    ap.add_argument("--enter-equity", action="store_true",
+                    help="log the equity-sleeve holding the book prescribes now")
+    ap.add_argument("--enter-condor", type=int, metavar="LOTS", default=0,
+                    help="log THIS MANY condor lots now (one ladder tranche)")
     args = ap.parse_args()
 
     if args.start:
@@ -263,6 +357,16 @@ def main() -> int:
             return 1
         print(f"paper book opened at Rs{args.capital:,.0f}")
         _print_status(status())
+        return 0
+    if args.enter_equity or args.enter_condor:
+        r = enter_from_plan(equity=args.enter_equity,
+                            condor_lots=args.enter_condor)
+        if not r.get("ok"):
+            print(r["reason"])
+            return 1
+        for line in r["logged"]:
+            print(f"  logged: {line}")
+        print(f"  cash now: Rs{r.get('cash', 0):,.2f}")
         return 0
     if args.mark:
         r = mark()
