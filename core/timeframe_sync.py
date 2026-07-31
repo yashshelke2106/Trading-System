@@ -130,16 +130,29 @@ class TimeframeSyncEngine:
     # ── Data fetchers ────────────────────────────────────────────────────
 
     def _fetch(self, api, sym, interval: int, days_back: int = 5) -> pd.DataFrame:
-        """Fetch intraday bars (5m or 15m) with rate-limit throttle."""
+        """Fetch intraday bars (5m or 15m) with rate-limit throttle.
+
+        Dhan first; on empty (e.g. expired sub -> 401) fall back to yfinance in
+        the identical column shape. Without this the scanner receives zero bars
+        and finds zero trades regardless of the tape."""
         with _SEM:
             time.sleep(0.35)
-            return api.get_intraday_data(sym, interval=interval, days_back=days_back)
+            df = api.get_intraday_data(sym, interval=interval, days_back=days_back)
+        if df is None or getattr(df, "empty", True):
+            from core.ohlcv_fallback import intraday as _yf_intra
+            df = _yf_intra(sym, interval=interval, days_back=days_back)
+        return df
 
     def _fetch_daily(self, api, sym, days_back: int = 60) -> pd.DataFrame:
-        """Fetch daily OHLCV bars — 60 trading days gives enough indicator warmup."""
+        """Fetch daily OHLCV bars — 60 trading days gives enough indicator
+        warmup. Dhan first, yfinance fallback on empty (see _fetch)."""
         with _SEM:
             time.sleep(0.35)
-            return api.get_historical_data(sym, from_date=days_back)
+            df = api.get_historical_data(sym, from_date=days_back)
+        if df is None or getattr(df, "empty", True):
+            from core.ohlcv_fallback import daily as _yf_daily
+            df = _yf_daily(sym, days_back=days_back)
+        return df
 
     @staticmethod
     def _resample_weekly(df: pd.DataFrame) -> pd.DataFrame:
