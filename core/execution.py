@@ -51,6 +51,53 @@ class ExecutionEngine:
         stamp = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
         return f"ORD_{stamp}_{self.order_id_counter:04d}"
 
+    # ---- honest PAPER fills -------------------------------------------------
+    # A paper fill must model what a live order would actually get, not the
+    # price we asked for. Perfect fills at the requested price (the old
+    # `price or 2500`) are exactly the mirage that inflated results. These
+    # helpers price a paper fill off the LIVE quote and CROSS the spread +
+    # slippage. They NEVER place an order — read-only quotes only.
+    _DEFAULT_FILL_COST_BPS = {"equity": 5, "futures": 5, "option": 50}
+
+    def _live_ref_price(self, symbol, kind, option_strike=None, option_type=None):
+        """Best available LIVE reference price for a paper fill, or None.
+        Read-only: fetches a quote, never an order."""
+        if not self.dhan_api:
+            return None
+        try:
+            if kind == "option" and option_strike and option_type:
+                exp = self._next_nse_expiry(symbol)
+                ce_pe = "CE" if str(option_type).upper().startswith("C") else "PE"
+                ltp = self.dhan_api.get_option_quote(symbol, exp, float(option_strike), ce_pe)
+                return float(ltp) if ltp else None
+            q = self.dhan_api.get_quote([symbol])
+            items = q.get("data") if isinstance(q, dict) else None
+            if items:
+                lp = items[0].get("last_price") or items[0].get("lastTradedPrice")
+                return float(lp) if lp else None
+        except Exception as e:
+            print(f"[PAPER] live quote failed for {symbol}: {e}")
+        return None
+
+    def _paper_fill(self, symbol, tx, requested, kind,
+                    option_strike=None, option_type=None):
+        """Model a realistic paper fill: cross the spread + slippage on the LIVE
+        reference price. Falls back to the requested price (with a warning) when
+        no live quote is available — but NEVER a hardcoded nominal. Returns
+        (filled_price, source) or (None, 'no_price')."""
+        ref = self._live_ref_price(symbol, kind, option_strike, option_type)
+        source = "live"
+        if ref is None:
+            ref, source = requested, "requested(no-live-quote)"
+        if not ref or ref <= 0:
+            return None, "no_price"
+        cost = getattr(config, "PAPER_FILL_COST_BPS", None)
+        if not isinstance(cost, dict):
+            cost = self._DEFAULT_FILL_COST_BPS
+        adj = cost.get(kind, 5) / 1e4          # half-spread crossed + slippage
+        px = ref * (1 + adj) if tx == "BUY" else ref * (1 - adj)
+        return round(px, 2), source
+
     def place_order(self, symbol: str, direction: str, quantity: int,
                   order_type: str = "LIMIT", price: float = None,
                   is_option: bool = False, option_strike: float = None,
@@ -95,15 +142,28 @@ class ExecutionEngine:
         _tx = {"long": "BUY", "short": "SELL"}.get(direction.lower(), direction.upper())
 
         if config.USE_MOCK_DATA or getattr(config, 'PAPER_TRADE', False) or not self.dhan_api:
-            filled_price = price or 2500
-            filled_quantity = quantity
-            mode = "PAPER" if getattr(config, 'PAPER_TRADE', False) and not config.USE_MOCK_DATA else "MOCK"
+            if config.USE_MOCK_DATA:
+                # offline MOCK: no live data source at all — keep a nominal price
+                filled_price, source, mode = (price or 2500), "mock", "MOCK"
+            else:
+                filled_price, source = self._paper_fill(symbol, _tx, price, "equity")
+                mode = "PAPER"
+                if filled_price is None:
+                    return OrderResult(
+                        success=False,
+                        order_id=self.generate_order_id(),
+                        filled_price=0,
+                        filled_quantity=0,
+                        message=f"[PAPER] {symbol}: no live price — fill refused "
+                                f"(never a silent 2500)",
+                        retry_count=0,
+                    )
             return OrderResult(
                 success=True,
                 order_id=self.generate_order_id(),
                 filled_price=filled_price,
-                filled_quantity=filled_quantity,
-                message=f"[{mode}] {_tx} {quantity} {symbol} @ {filled_price}",
+                filled_quantity=quantity,
+                message=f"[{mode}] {_tx} {quantity} {symbol} @ {filled_price} ({source})",
                 retry_count=0
             )
 
@@ -149,14 +209,29 @@ class ExecutionEngine:
         _tx = {"long": "BUY", "short": "SELL"}.get(direction.lower(), direction.upper())
 
         if config.USE_MOCK_DATA or getattr(config, 'PAPER_TRADE', False):
-            filled_price = price or 50
-            mode = "PAPER" if getattr(config, 'PAPER_TRADE', False) and not config.USE_MOCK_DATA else "MOCK"
+            if config.USE_MOCK_DATA:
+                filled_price, source, mode = (price or 50), "mock", "MOCK"
+            else:
+                filled_price, source = self._paper_fill(
+                    symbol, _tx, price, "option",
+                    option_strike=option_strike, option_type=option_type)
+                mode = "PAPER"
+                if filled_price is None:
+                    return OrderResult(
+                        success=False,
+                        order_id=self.generate_order_id(),
+                        filled_price=0,
+                        filled_quantity=0,
+                        message=f"[PAPER] {symbol} {option_strike}{option_type}: "
+                                f"no live premium — fill refused",
+                        retry_count=0,
+                    )
             return OrderResult(
                 success=True,
                 order_id=self.generate_order_id(),
                 filled_price=filled_price,
                 filled_quantity=quantity,
-                message=f"[{mode}] {_tx} {quantity} {symbol} {option_strike}{option_type} @ {filled_price}",
+                message=f"[{mode}] {_tx} {quantity} {symbol} {option_strike}{option_type} @ {filled_price} ({source})",
                 retry_count=0
             )
 
@@ -212,14 +287,26 @@ class ExecutionEngine:
 
         # PAPER / MOCK: simulate the fill (no real order)
         if config.USE_MOCK_DATA or getattr(config, 'PAPER_TRADE', False) or not self.dhan_api:
-            filled_price = price or 0
-            mode = "PAPER" if getattr(config, 'PAPER_TRADE', False) and not config.USE_MOCK_DATA else "MOCK"
+            if config.USE_MOCK_DATA:
+                filled_price, source, mode = (price or 0), "mock", "MOCK"
+            else:
+                filled_price, source = self._paper_fill(symbol, _tx, price, "futures")
+                mode = "PAPER"
+                if filled_price is None:
+                    return OrderResult(
+                        success=False,
+                        order_id=self.generate_order_id(),
+                        filled_price=0,
+                        filled_quantity=0,
+                        message=f"[PAPER] {symbol}-FUT: no live price — fill refused",
+                        retry_count=0,
+                    )
             return OrderResult(
                 success=True,
                 order_id=self.generate_order_id(),
                 filled_price=filled_price,
                 filled_quantity=quantity,
-                message=f"[{mode}] {_tx} {quantity} {symbol}-FUT @ {filled_price}",
+                message=f"[{mode}] {_tx} {quantity} {symbol}-FUT @ {filled_price} ({source})",
                 retry_count=0,
             )
 

@@ -32,6 +32,12 @@ USE_MOCK_DATA = False
 # Paper-trade mode: real market data, simulated order fills (no real orders)
 PAPER_TRADE = True
 
+# Honest paper-fill cost (basis points). A paper fill is priced off the LIVE
+# quote and CROSSES the spread + slippage by this many bps — never the requested
+# price (that perfect-fill assumption is the mirage that inflated old results).
+# BUY fills at ref*(1+bps/1e4), SELL at ref*(1-bps/1e4). Options are wider.
+PAPER_FILL_COST_BPS = {"equity": 5, "futures": 5, "option": 50}
+
 # Instrument mode: how the directional view is expressed.
 #   "futures" — trade the stock FUTURE (delta~1, no theta/IV/strike). DEFAULT.
 #   "options" — buy ATM/ITM option leg (legacy; theta+IV+spread pollute edge).

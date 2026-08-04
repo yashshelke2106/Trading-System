@@ -1,0 +1,99 @@
+name: release
+
+# Continuous delivery for a LOCAL trading system.
+#
+# There is no live deploy target by design: the engine runs on the operator's
+# own machine (start_trading.bat) and PAPER_TRADE stays True. "Delivery" here
+# therefore means: on a version tag, produce a reproducible, checksummed,
+# UI-prebuilt bundle and attach it to a GitHub Release. The trading engine is
+# NEVER auto-started or deployed to any live venue by this workflow.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version label for a manual package (e.g. v0.0.1-test)"
+        required: false
+        default: "v0.0.0-manual"
+
+permissions:
+  contents: write  # required to create the Release
+
+jobs:
+  package:
+    name: package deployable
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      # --- gate: the release must pass the same safety rail as CI ---
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Verify PAPER_TRADE in shipped example config
+        run: |
+          cp config.example.py config.py
+          python -c "import config; assert config.PAPER_TRADE is True, 'refusing to release with PAPER_TRADE != True'"
+          rm config.py  # never ship a config.py, only the example
+
+      # --- build the UI so the bundle is runnable without a Node build step ---
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: trading-ui/package-lock.json
+      - name: Build UI
+        working-directory: trading-ui
+        run: |
+          npm ci
+          npm run build
+        env:
+          NEXT_TELEMETRY_DISABLED: "1"
+
+      # --- resolve version from tag or manual input ---
+      - name: Resolve version
+        id: ver
+        run: |
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            echo "version=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=${{ github.event.inputs.version }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      # --- assemble the bundle: code + prebuilt UI + launch scripts + example ---
+      # Excluded: git metadata, runtime logs (data, not code), node_modules,
+      # local scratch. config.py is gitignored so it cannot be present.
+      - name: Package
+        run: |
+          VERSION="${{ steps.ver.outputs.version }}"
+          mkdir -p dist staging
+          rsync -a \
+            --exclude='.git' \
+            --exclude='logs' \
+            --exclude='dist' \
+            --exclude='staging' \
+            --exclude='tmp_stat_test' \
+            --exclude='node_modules' \
+            --exclude='trading-ui/node_modules' \
+            --exclude='**/__pycache__' \
+            ./ staging/
+          tar -czf "dist/fo-terminal-${VERSION}.tar.gz" -C staging .
+          cd dist && sha256sum *.tar.gz > SHA256SUMS.txt
+          ls -lh
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "F&O Terminal ${{ steps.ver.outputs.version }}"
+          tag_name: ${{ github.ref_type == 'tag' && github.ref_name || steps.ver.outputs.version }}
+          generate_release_notes: true
+          files: |
+            dist/fo-terminal-*.tar.gz
+            dist/SHA256SUMS.txt
+          body: |
+            Reproducible bundle of the F&O Signal Terminal (engine + API + prebuilt UI).
+
+            **Not a live deployment.** Runs locally; `PAPER_TRADE=True`. Unpack, copy
+            `config.example.py` to `config.py`, add credentials, then `start_trading.bat`.

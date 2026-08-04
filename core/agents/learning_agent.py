@@ -75,7 +75,7 @@ class LearningAgent(BaseAgent):
             # 2b. MomentumProfiler — per-stock indicator fingerprinting
             try:
                 from core.momentum_profiler import record_from_journal_entry
-                record_from_journal_entry(data)
+                record_from_journal_entry(event.payload)
             except Exception as e:
                 log.debug(f"[Learning] MomProf err: {e}")
 

@@ -20,6 +20,10 @@ class _DelistedFilter(_logging.Filter):
 
 _logging.getLogger("yfinance").addFilter(_DelistedFilter())
 
+# Module logger. Several except-branches call bare `log.warning/debug`; without
+# this they raised NameError and masked the original error they meant to report.
+log = _logging.getLogger("scan_only_v2")
+
 import config
 from core.api_dhan import DhanAPI, check_token_health
 from core.timeframe_sync import TimeframeSyncEngine

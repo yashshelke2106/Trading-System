@@ -1,0 +1,95 @@
+name: ci
+
+# Continuous integration for the F&O Signal Terminal.
+# Two independent jobs — the Python engine/API and the Next.js UI — so a failure
+# in one is legible on its own. Replaces the old tests.yml (folded in below).
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+# A new push to the same ref cancels the in-flight run — no wasted minutes on
+# superseded commits.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  python:
+    name: python (engine + API)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest ruff
+
+      # config.py is gitignored (local credentials). CI runs against the
+      # committed example — a complete, PAPER_TRADE=True default set.
+      - name: Create config from example
+        run: cp config.example.py config.py
+
+      # BLOCKING lint: the "this code is actually broken" ruleset only —
+      # syntax errors (E9), undefined / unused-in-a-breaking-way names, f-string
+      # bugs (F63/F7/F82). Legacy style is NOT allowed to fail a build.
+      - name: Lint — errors (blocking)
+        run: ruff check --output-format=github --select E9,F63,F7,F82 .
+
+      # INFORMATIONAL lint: the full E/F/W/I set from pyproject. Annotates the
+      # run for cleanup but never fails it.
+      - name: Lint — full (informational)
+        run: ruff check --output-format=github . || true
+
+      - name: Run tests
+        run: python -m pytest tests/ -q --no-header
+
+      # Guardrail: the suite must never run against live-order settings, and a
+      # real config.py must never be committed.
+      - name: Assert safety rails
+        run: |
+          python -c "import config; assert config.PAPER_TRADE is True, 'PAPER_TRADE must be True'"
+          test -z "$(git ls-files config.py)" || { echo 'config.py must not be committed'; exit 1; }
+
+  frontend:
+    name: frontend (trading-ui)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: trading-ui
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: trading-ui/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Production build IS the typecheck+build gate: next build type-checks the
+      # app by default (no typescript.ignoreBuildErrors in next.config.ts), so a
+      # type error fails the build. A standalone `tsc --noEmit` is avoided on
+      # purpose — under Next 16 it trips over generated .next/types/*, not source.
+      # The UI is client-rendered (pages are "use client"; the one dynamic route
+      # is force-dynamic), so the build does no network I/O — no backend, no
+      # secrets needed.
+      - name: Build (type-checks + compiles)
+        run: npm run build
+        env:
+          NEXT_TELEMETRY_DISABLED: "1"

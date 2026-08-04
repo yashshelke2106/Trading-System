@@ -25,6 +25,8 @@ import time
 from datetime import datetime, date, timedelta
 from typing import Dict, List, Optional
 
+import pandas as pd
+
 log = logging.getLogger(__name__)
 
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

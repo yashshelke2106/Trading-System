@@ -238,7 +238,7 @@ def _fetch_prices(symbols: List[str]) -> Dict[str, float]:
                 pass
         return prices
         data = None  # dead code below retained but unreachable
-        for sym, ticker in zip(symbols, tickers):
+        for sym, ticker in zip(symbols, tickers):  # noqa: F821 — unreachable (see return above)
             try:
                 if len(symbols) == 1:
                     close_col = data["Close"] if "Close" in data.columns else None

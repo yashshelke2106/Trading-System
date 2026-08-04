@@ -47,20 +47,28 @@ Each signal: `{symbol, direction, entry_price, sl_price, target_price, rr_ratio,
 **Signal-only**: scan → signals.json → Streamlit dashboard → manual execution in Dhan app.
 `PAPER_TRADE=True` in config.py — no real orders even if live_runner.py is running.
 
-## Dhan API Status — EXPIRED (2026-07-24)
-**The Dhan Data API subscription has expired.** Every `/v2/charts/*` call
-returns HTTP 401. Consequences, verified:
-- `core/api_dhan.py` daily/intraday → dead
-- `core/market_feed.py` (WebSocket LTP/volume/**order-flow queues**) → dead.
-  Order flow, bid/ask and L2 depth are therefore NOT capturable at all.
-- `core/market_bias.py` fell back to **randomly generated bars** and scored
-  them a confident LONG_BIAS. Fixed: synthetic frames are now tagged
-  `df.attrs["synthetic"]` and force `MarketBias.NEUTRAL` + `ctx.synthetic=True`.
-- `core/sector_rotation.py` routed to the dead Dhan endpoint, so
-  `check_sector_alignment()` failed open and passed 100% of trades. Fixed:
-  yfinance fallback restored (matches its own docstring).
+## Dhan API Status — LIVE again (2026-08-04)
+**The Dhan Data API subscription is ACTIVE again** (was expired 2026-07-24 →
+2026-08-03). `test_data_api()` → "Active"; `get_intraday_data` returns real 5m
+bars; `get_quote` returns live LTP + L2 **depth**. Three live-quote bugs were
+found and fixed on restore (commit for this):
+- **Endpoint casing** — `/marketFeed/quote` → `/marketfeed/quote` (Dhan router is
+  case-sensitive; capital-F 404s). Same fix in `get_option_quote`.
+- **Security-id type** — `get_quote` must send integer security-ids, not strings.
+- **Response parser** — Dhan nests `data → SEGMENT → securityId → fields`; the old
+  parser stopped at segment level so `last_price` was always 0.
 
-Working data sources (probed live 2026-07-24, market open):
+Honest paper fills are now wired (`core/execution.py` `_paper_fill`): a PAPER fill
+is priced off the live quote and CROSSES the spread + slippage
+(`config.PAPER_FILL_COST_BPS`), never `price or 2500`. No live order is ever sent
+(PAPER_TRADE gate intact).
+
+Still true from the outage era: `core/market_bias.py` synthetic-frame guard
+(`df.attrs["synthetic"]` → force NEUTRAL) and `core/sector_rotation.py` yfinance
+fallback remain in place as defenses. `core/market_feed.py` WebSocket order-flow
+queues were not re-verified live — re-probe before relying on order flow / L2.
+
+Data sources (yfinance fallbacks still valid when Dhan hiccups):
 | Source | Status |
 |---|---|
 | yfinance daily | OK |

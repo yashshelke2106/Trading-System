@@ -726,11 +726,14 @@ class DhanAPI:
         return df
 
     def get_quote(self, symbols: List[str], exchange: str = "NSE_EQ") -> Dict:
-        """Fetch LTP + volume. Dhan v2 endpoint: POST /marketFeed/quote.
+        """Fetch LTP + volume. Dhan v2 endpoint: POST /marketfeed/quote.
         Returns normalized {"data": [{"symbol": str, "volume": int, "last_price": float}, ...]}
         so callers don't need to handle the security-id-keyed response format.
+
+        NOTE: the path is lowercase /marketfeed/ — the capital-F form 404s (Dhan's
+        router is case-sensitive). This bug silently killed live LTP/quote+depth.
         """
-        endpoint = "/marketFeed/quote"
+        endpoint = "/marketfeed/quote"
 
         # Build reverse map: security_id → symbol for response parsing
         id_to_sym: Dict[str, str] = {}
@@ -738,27 +741,44 @@ class DhanAPI:
             sid = get_security_id(sym.upper())
             id_to_sym[str(sid)] = sym.upper()
 
-        # Dhan v2 quote request: {exchange_segment: [security_id, ...]}
-        request_data = {exchange: list(id_to_sym.keys())}
+        # Dhan v2 quote request: {exchange_segment: [security_id, ...]}.
+        # Security IDs must be INTEGERS — string ids are rejected (empty/error
+        # response), which silently broke live LTP+depth.
+        request_data = {exchange: [int(k) if str(k).isdigit() else k for k in id_to_sym]}
         result = self._request("POST", endpoint, request_data)
 
         if "error" in result:
             return result
 
-        # Normalize to list-of-dicts so live_runner._scan_via_quotes() can iterate normally
+        # Normalize to list-of-dicts so live_runner._scan_via_quotes() can iterate normally.
+        # Dhan v2 nests the payload by SEGMENT then SECURITY-ID:
+        #   {"data": {"NSE_EQ": {"2885": {last_price, depth, ...}}}}
+        # The old parser stopped at the segment level, so last_price was always 0.
         raw_data = result.get("data", {}) if isinstance(result, dict) else {}
         items: List[Dict] = []
+
+        def _emit(sid, info):
+            if not isinstance(info, dict):
+                return
+            sym = id_to_sym.get(str(sid), info.get("tradingSymbol", str(sid)))
+            items.append({
+                "symbol":        sym,
+                "tradingSymbol": sym,
+                "volume":        info.get("volume", 0) or info.get("totalTradedVolume", 0)
+                                 or info.get("last_quantity", 0),
+                "last_price":    info.get("last_price", 0) or info.get("lastTradedPrice", 0)
+                                 or info.get("ltp", 0),
+                "depth":         info.get("depth"),  # {buy:[{price,quantity}], sell:[...]}
+            })
+
         if isinstance(raw_data, dict):
-            for sid, info in raw_data.items():
-                if not isinstance(info, dict):
-                    continue
-                sym = id_to_sym.get(str(sid), info.get("tradingSymbol", sid))
-                items.append({
-                    "symbol":         sym,
-                    "tradingSymbol":  sym,
-                    "volume":         info.get("volume", 0) or info.get("totalTradedVolume", 0),
-                    "last_price":     info.get("lastTradedPrice", 0) or info.get("last_price", 0),
-                })
+            for k, v in raw_data.items():
+                # segment-nested {sid: fields} vs flat {fields}
+                if isinstance(v, dict) and any(isinstance(vv, dict) for vv in v.values()):
+                    for sid, info in v.items():
+                        _emit(sid, info)
+                else:
+                    _emit(k, v)
         elif isinstance(raw_data, list):
             items = raw_data
 
@@ -766,10 +786,11 @@ class DhanAPI:
 
     def get_option_quote(self, underlying: str, expiry_iso: str, strike: float,
                           ce_pe: str) -> Optional[float]:
-        """Get live LTP for a specific option contract via /marketFeed/quote.
+        """Get live LTP for a specific option contract via /marketfeed/quote.
 
         Uses trading JWT (NOT Data API key) — works without Data API subscription.
-        Returns LTP float or None on failure.
+        Returns LTP float or None on failure. Path is lowercase /marketfeed/ (the
+        capital-F form 404s).
         """
         try:
             from . import scrip_master as _sm
@@ -779,7 +800,7 @@ class DhanAPI:
                 return None
             # NSE F&O segment for stock options
             seg = "NSE_FNO"
-            result = self._request("POST", "/marketFeed/quote",
+            result = self._request("POST", "/marketfeed/quote",
                                    {seg: [int(sid) if str(sid).isdigit() else sid]})
             if "error" in result:
                 log.debug(f"option quote error: {result['error']}")
