@@ -134,7 +134,26 @@ a lucky random walk. ADX(14) lands ~18-30 on pure noise. Labels describe what
 the tape has done, never what it will do.
 
 ## NSE Market Hours
-09:15 – 15:30 IST, Mon–Fri. Expiry: weekly Thursday (stocks), monthly last Thursday (index).
+09:15 – 15:30 IST, Mon–Fri.
+
+**Expiry (this line used to be inverted — the code was right, the doc was wrong):**
+- **Single-stock F&O → MONTHLY only**, last Thursday of the month, holiday-adjusted.
+  There are no weekly single-stock contracts.
+- **Index (NIFTY/BANKNIFTY/FINNIFTY/MIDCPNIFTY) → WEEKLY** Thursday, plus monthly.
+
+`core/nse_calendar.py` dispatches this correctly (`expiry_str_ddmonyy`).
+Verified 2026-08-06: RELIANCE → 27AUG26 (monthly), NIFTY → 13AUG26 (weekly).
+Do not "fix" the calendar to match a stale doc.
+
+## F&O Margin — most stock futures are unfundable at small capital
+`core/margin.py` estimates SPAN + exposure + broker buffer;
+`risk_engine.check_margin_affordable()` refuses positions the account cannot
+open (a broker rejects them anyway). Measured at Rs 1,00,000 capital: one stock
+futures lot costs Rs 0.9–1.7 **lakh** of margin, so 6 of 7 F&O names tested are
+unfundable and none fit a half-of-capital cap. A long option on the same name
+costs ~Rs 13,750 (premium only, no SPAN). **At small capital the only workable
+stock-F&O expression is a long option** — size the account or trade options,
+don't expect stock futures to fill.
 
 ## Never Touch Without Thinking
 - `config.py` `PAPER_TRADE` flag — must stay True unless explicitly going live
