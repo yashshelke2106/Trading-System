@@ -1,3 +1,4 @@
+import logging
 import pandas as pd
 import numpy as np
 from typing import Dict, Optional, List
@@ -61,6 +62,9 @@ class RiskEngine:
         self.consecutive_losses = 0
         self.trades_today = 0
         self.last_reset = date.today()
+        # Set by calculate_quantity when the min-1-lot floor exceeds the
+        # per-trade risk cap. None = no breach on the last sizing call.
+        self.last_size_breach: Optional[Dict] = None
         # v4 fix#5: per-symbol same-day re-entry block.
         # When a symbol hits SL, no further trades in that symbol until next session.
         # Prevents revenge entries / chasing the same setup that just failed.
@@ -248,7 +252,28 @@ class RiskEngine:
         if lot_size <= 1:
             return max(1, raw_qty)
         # round down to nearest lot; ensure at least 1 lot
-        return max(lot_size, (raw_qty // lot_size) * lot_size)
+        qty = max(lot_size, (raw_qty // lot_size) * lot_size)
+
+        # One lot can risk MORE than max_risk_per_trade allows — the floor above
+        # silently wins over the cap. Measured 2026-08-06: Rs 500k at 1.2% is a
+        # Rs 6,000 budget, but KOTAKBANK (lot 2000, Rs 20 stop) risks Rs 40,000,
+        # 6.7x the cap. Behaviour is deliberately UNCHANGED (refusing the trade
+        # is a policy decision, not a bugfix) but the breach is no longer
+        # invisible: it is recorded so the operator can see it and decide.
+        actual_risk = risk_per_share * qty
+        if actual_risk > risk_amount:
+            breach = {
+                "symbol": symbol, "qty": qty, "lot_size": lot_size,
+                "risk_budget": round(risk_amount, 2),
+                "actual_risk": round(actual_risk, 2),
+                "multiple": round(actual_risk / risk_amount, 2) if risk_amount else None,
+            }
+            self.last_size_breach = breach
+            logging.getLogger(__name__).warning(
+                "[RISK] min-1-lot breaches risk cap: %s qty=%d risks %.0f vs "
+                "budget %.0f (%.1fx)", symbol or "?", qty, actual_risk,
+                risk_amount, breach["multiple"] or 0.0)
+        return qty
 
     def calculate_stop_loss(self, entry: float, direction: str, atr: float = None) -> float:
         # ATR-based SL when available; bounded by min/max % of entry to beat noise / cap risk.
