@@ -42,11 +42,13 @@ class Trade:
     entry_price: float
     exit_price: float
     quantity: int
-    pnl: float
+    pnl: float                  # NET of statutory charges + brokerage
     pnl_percent: float
     status: str
     reason: str
     holding_days: int = 0
+    gross_pnl: float = 0.0      # before charges — kept so the two reconcile
+    charges: float = 0.0        # STT + exchange + GST + SEBI + stamp + brokerage
 
 
 class RiskEngine:
@@ -355,10 +357,26 @@ class RiskEngine:
             return None
         
         if position.direction == "long":
-            pnl = (exit_price - position.entry_price) * position.quantity
+            gross_pnl = (exit_price - position.entry_price) * position.quantity
         else:
-            pnl = (position.entry_price - exit_price) * position.quantity
-        
+            gross_pnl = (position.entry_price - exit_price) * position.quantity
+
+        # Net of the charge stack. Reporting gross made every P&L in the system
+        # optimistic and impossible to reconcile against a broker contract note.
+        # Failure here must not block a close, so fall back to gross.
+        charges = 0.0
+        try:
+            from core.charges import round_trip
+            buy_px, sell_px = ((position.entry_price, exit_price)
+                               if position.direction == "long"
+                               else (exit_price, position.entry_price))
+            segment = "options" if getattr(position, "option_type", None) else "futures"
+            charges = round_trip(buy_px, sell_px,
+                                 position.quantity, segment).total
+        except Exception:
+            charges = 0.0
+
+        pnl = gross_pnl - charges
         pnl_percent = (pnl / (position.entry_price * position.quantity)) * 100
         
         status = "WIN" if pnl > 0 else "LOSS"
@@ -378,6 +396,8 @@ class RiskEngine:
             status=status,
             reason=reason,
             holding_days=holding_days,
+            gross_pnl=round(gross_pnl, 2),
+            charges=round(charges, 2),
         )
         
         self.trades.append(trade)

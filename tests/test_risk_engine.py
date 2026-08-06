@@ -82,10 +82,17 @@ def test_consecutive_and_trade_limits():
 
 
 def test_close_position_pnl_win():
+    """P&L is reported NET of charges; gross_pnl and charges are kept so the
+    two reconcile against a broker contract note."""
     r = RiskEngine(capital=100000)
     r.positions = [Position("X", "long", 100, 10, 95, 110)]
     tr = r.close_position("X", 110, reason="target")
-    assert tr is not None and abs(tr.pnl - 100) < 1e-6 and tr.status == "WIN"
+    assert tr is not None
+    assert abs(tr.gross_pnl - 100) < 1e-6
+    assert tr.charges > 0
+    assert abs(tr.pnl - (tr.gross_pnl - tr.charges)) < 1e-6
+    assert tr.pnl < tr.gross_pnl
+    assert tr.status == "WIN"
 
 
 # ── GAP #2: entry gate must block when open-MTM pushes combined loss over cap ──
