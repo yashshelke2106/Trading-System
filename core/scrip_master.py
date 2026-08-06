@@ -133,6 +133,16 @@ def _build_indexes() -> None:
                     # Option row — index by (underlying, expiry, strike, ce/pe)
                     # SEM_TRADING_SYMBOL format: "RELIANCE-Jun2026-1410-PE"
                     underlying_name = (row.get("SM_SYMBOL_NAME") or "").upper().replace("OPT", "")
+                    # Resolve the underlying from the TRADING SYMBOL first.
+                    # OPTIDX rows carry an EMPTY SM_SYMBOL_NAME, so deriving it
+                    # only after the guard below dropped every index option
+                    # ("NIFTY-Sep2026-29150-CE" and 4,000 siblings) out of the
+                    # index, and lookup_option() could never resolve an index
+                    # option id. Trading symbol is present on every row.
+                    if "-" in sym:
+                        ts_under = sym.split("-")[0].upper()
+                        if ts_under:
+                            underlying_name = ts_under
                     strike = row.get("SEM_STRIKE_PRICE") or "0"
                     ce_pe = (row.get("SEM_OPTION_TYPE") or "").upper()
                     expiry_raw = row.get("SEM_EXPIRY_DATE") or ""
@@ -145,12 +155,6 @@ def _build_indexes() -> None:
                         strike_f = float(strike)
                     except Exception:
                         continue
-                    # Extract clean underlying from trading symbol if SM_SYMBOL_NAME unreliable
-                    # e.g. "RELIANCE-Jun2026-1410-PE" -> "RELIANCE"
-                    if "-" in sym:
-                        ts_under = sym.split("-")[0].upper()
-                        if ts_under:
-                            underlying_name = ts_under
                     key = (underlying_name, expiry_compact, strike_f, ce_pe)
                     opt.setdefault(key, sid)
     except Exception as e:
@@ -235,6 +239,42 @@ def lookup(symbol: str) -> Optional[str]:
     renamed = _RENAMES.get(s)
     if renamed and _eq_by_symbol and renamed in _eq_by_symbol:
         return _eq_by_symbol[renamed]
+    return None
+
+
+def listed_expiries(underlying: str) -> list:
+    """Every expiry ACTUALLY listed for this underlying, as sorted ISO dates.
+
+    Read the exchange's contract list instead of computing a weekday rule.
+    NSE moved F&O expiry off Thursday and the 2026 master carries BOTH
+    Tuesday and Thursday contracts (Tuesday outnumbers Thursday ~2:1), so any
+    hardcoded "last Thursday" is wrong for part of the book and right for the
+    rest. The contract list is the only thing that is right for all of it.
+    """
+    if not underlying:
+        return []
+    _ensure_loaded()
+    if not _opt_by_key:
+        return []
+    want = _clean_symbol(underlying)
+    out = set()
+    for (und, expiry_compact, _strike, _cp) in _opt_by_key:
+        if und == want and len(expiry_compact) == 8:
+            out.add(f"{expiry_compact[:4]}-{expiry_compact[4:6]}-{expiry_compact[6:]}")
+    return sorted(out)
+
+
+def nearest_listed_expiry(underlying: str, on_or_after: str = "") -> Optional[str]:
+    """The next real, tradeable expiry for this underlying (ISO), or None.
+
+    Callers should prefer this over a computed calendar: an order on a date
+    the exchange does not list is simply rejected.
+    """
+    from datetime import date as _date
+    ref = on_or_after or _date.today().isoformat()
+    for e in listed_expiries(underlying):
+        if e >= ref:
+            return e
     return None
 
 

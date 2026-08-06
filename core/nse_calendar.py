@@ -123,13 +123,47 @@ def nearest_weekly_expiry(from_date: Optional[date] = None,
     return candidate
 
 
+def listed_expiry(symbol: str, from_date: Optional[date] = None) -> Optional[date]:
+    """Nearest expiry ACTUALLY listed by the exchange, or None if unknown.
+
+    The weekday rules in this module are a MODEL of the contract calendar, and
+    the model has drifted. Measured 2026-08-06 against the Dhan scrip master:
+    NIFTY weeklies are all TUESDAYS (11/18/25 Aug) while the rule computes
+    Thursday 13 Aug -- a contract that does not exist -- and RELIANCE lists
+    both 25 Aug (Tue) and 27 Aug (Thu) with the Tuesday nearer. The live option
+    chain agrees with the scrip master, not with the rule.
+
+    So ask the exchange first; keep the computed rule only for when the scrip
+    master is unavailable.
+    """
+    try:
+        from core.scrip_master import nearest_listed_expiry
+    except Exception:
+        return None
+    try:
+        ref = (from_date or _now_ist().date()).isoformat()
+        iso = nearest_listed_expiry(symbol, ref)
+        if iso:
+            y, m, d = (int(x) for x in iso.split("-"))
+            return date(y, m, d)
+    except Exception:
+        pass
+    return None
+
+
 def nearest_expiry(symbol: str, from_date: Optional[date] = None,
                    holidays: Optional[Set[date]] = None) -> date:
     """
-    Dispatch to weekly (indices) or monthly (stocks) expiry.
-    Indices: NIFTY, BANKNIFTY, FINNIFTY, MIDCPNIFTY → weekly Thursday
-    All other F&O stocks → last Thursday of month (monthly)
+    Nearest TRADEABLE expiry.
+
+    Real listed contracts first (see listed_expiry); the weekday model is the
+    fallback -- indices weekly, single stocks monthly last-Thursday. An order
+    on a date the exchange does not list is simply rejected, so the contract
+    list outranks any rule encoded here.
     """
+    real = listed_expiry(symbol, from_date)
+    if real is not None:
+        return real
     if symbol.upper() in ("NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "NIFTYIT"):
         return nearest_weekly_expiry(from_date, holidays)
     return nearest_monthly_expiry(from_date, holidays)
