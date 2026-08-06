@@ -202,10 +202,27 @@ def lookup_option(underlying: str, expiry_iso: str, strike: float,
 # Public API
 # ─────────────────────────────────────────────────────────────────────────────
 
+# Corporate actions rename the NSE trading symbol while the universe list and
+# our history archive still carry the old name. Without these, lookup() misses
+# and get_security_id() falls back to passing the SYMBOL as securityId, which
+# Dhan rejects with HTTP 400 on every /charts request for that name.
+# Verified against the cached scrip master (SM_SYMBOL_NAME in the comment).
+_RENAMES = {
+    "TATAMOTORS": "TMCV",       # TATA MOTORS LIMITED (demerger: TMCV cv / TMPV pv)
+    "MCDOWELL-N": "UNITDSPR",   # UNITED SPIRITS LIMITED
+    "IDFC":       "IDFCFIRSTB", # IDFC Ltd merged into IDFC FIRST Bank (successor)
+    "HPCL":       "HINDPETRO",  # HINDUSTAN PETROLEUM CORP (NSE symbol differs)
+}
+# Requested by callers but absent from Dhan's scrip master AND yfinance, i.e.
+# genuinely delisted/merged with no successor row to point at. Kept as data,
+# not code, so the universe can be pruned deliberately rather than silently.
+DELISTED_NO_SUCCESSOR = ("LTIM", "GUJGASLTD")
+
+
 def lookup(symbol: str) -> Optional[str]:
     """Return Dhan security_id (string) for symbol, or None on miss.
 
-    Order: index map → equity map → cleaned-equity map.
+    Order: index map → equity map → renamed-symbol retry.
     """
     if not symbol:
         return None
@@ -215,6 +232,9 @@ def lookup(symbol: str) -> Optional[str]:
         return _idx_by_symbol[s]
     if _eq_by_symbol and s in _eq_by_symbol:
         return _eq_by_symbol[s]
+    renamed = _RENAMES.get(s)
+    if renamed and _eq_by_symbol and renamed in _eq_by_symbol:
+        return _eq_by_symbol[renamed]
     return None
 
 

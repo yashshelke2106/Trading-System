@@ -448,6 +448,11 @@ def test_market_bias_falls_to_real_data_not_synthetic(monkeypatch):
                           "low": close * 0.995, "close": close,
                           "volume": np.full(250, 1e6),
                           "date": idx})
+    # Force the Dhan tier to fail. Without this the test only passed while Dhan
+    # was broken in the environment: a WORKING Dhan short-circuits at the first
+    # tier and the fallback this test exists to verify never runs.
+    from core.api_dhan import dhan_api
+    monkeypatch.setattr(dhan_api, "get_historical_data", lambda *a, **k: None)
     monkeypatch.setattr(eng, "_yf_index_frame", lambda s, d: frame.tail(d))
     # Live patch available and consistent.
     import core.live_quotes as lq
