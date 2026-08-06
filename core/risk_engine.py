@@ -65,6 +65,8 @@ class RiskEngine:
         # Set by calculate_quantity when the min-1-lot floor exceeds the
         # per-trade risk cap. None = no breach on the last sizing call.
         self.last_size_breach: Optional[Dict] = None
+        # Set by check_margin_affordable when a position cannot be funded.
+        self.last_margin_block: Optional[Dict] = None
         # v4 fix#5: per-symbol same-day re-entry block.
         # When a symbol hits SL, no further trades in that symbol until next session.
         # Prevents revenge entries / chasing the same setup that just failed.
@@ -201,6 +203,42 @@ class RiskEngine:
             self.reset_daily()
             self.symbol_stops_today.clear()   # v4 fix#5: fresh slate
             self.last_reset = today
+
+    def check_margin_affordable(self, symbol: str, price: float,
+                                lots: int = 1, instrument: str = "futures",
+                                premium: Optional[float] = None,
+                                max_capital_fraction: float = 0.5) -> bool:
+        """Can this account actually OPEN the position? A broker rejects an
+        order it cannot margin, so emitting a signal for one is a dead trade.
+
+        Measured 2026-08-06 at the default Rs 1,00,000 capital: one stock
+        futures lot needs Rs 0.9-1.7 lakh of margin, so 6 of 7 F&O names tested
+        were unfundable and NONE fit inside a sane half-of-capital cap. Long
+        options are the affordable expression at that size (premium only).
+
+        max_capital_fraction caps a single position: one lot consuming 92% of
+        the account is fundable and still not a position worth taking.
+        """
+        try:
+            from core.margin import estimate
+        except Exception:
+            return True          # never block a trade on an import failure
+        try:
+            m = estimate(symbol, price, lots=lots, instrument=instrument,
+                         capital=self.capital, premium=premium)
+        except Exception:
+            return True
+        budget = self.capital * max(0.0, min(1.0, max_capital_fraction))
+        if m.total > budget:
+            self.last_margin_block = m.to_dict()
+            logging.getLogger(__name__).warning(
+                "[RISK] margin blocks %s %s: needs %.0f vs %.0f usable "
+                "(%.0f%% of capital) - %s", symbol, instrument, m.total,
+                budget, m.total / self.capital * 100 if self.capital else 0,
+                m.note)
+            return False
+        self.last_margin_block = None
+        return True
 
     def can_trade(self, symbol: str = "", force_allowed: bool = False,
                   mark_prices: Optional[Dict[str, float]] = None,
