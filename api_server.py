@@ -65,6 +65,10 @@ _executor = ThreadPoolExecutor(max_workers=16)
 # finish and its result lands in the TTL cache for the next request.
 _RUN_DEADLINE_SEC = 12.0
 
+# Must exceed the probe's own network worst-case (connect 3s + read 5s = 8s),
+# else a healthy-but-slow Dhan trips this outer deadline before the request
+# even finishes and the UI wrongly shows the connection as dead.
+_DHAN_PROBE_TIMEOUT_SEC = 10.0
 # ── Simple TTL cache ──────────────────────────────────────────────────────────
 
 _CACHE: Dict[str, tuple] = {}  # key → (value, expires_at)
@@ -580,7 +584,12 @@ async def get_spike_alerts(min_confidence: int = 55):
     retry/backoff, which is how this endpoint used to block indefinitely. The
     probe result is already cached, so the short-circuit is free.
     """
-    probe = await _run(_dhan_probe_cached)
+    try:
+        probe = await _run(_dhan_probe_cached, timeout=_DHAN_PROBE_TIMEOUT_SEC)
+    except RunTimeout as e:
+        return {"alerts": [], "ts": datetime.now().isoformat(),
+                "skipped": True, "timeout": True, "error": str(e),
+                "reason": "Dhan connection check timed out"}
     if not probe.get("working"):
         return {"alerts": [], "ts": datetime.now().isoformat(),
                 "skipped": True,
@@ -731,6 +740,37 @@ async def get_allocation(refresh: bool = False):
 
 # ── Dhan live probe (validity, not presence) ────────────────────────────────
 
+def _dhan_configured() -> Dict[str, Any]:
+    """Which credentials are stored right now — a pure local read, no network.
+
+    The config form's (stored)/(missing) labels come from this. It MUST stay
+    network-free so the labels are always truthful even when the live probe
+    times out; otherwise a slow Dhan makes stored creds look unsaved and the
+    user re-enters them in an endless loop.
+    """
+    from core import secrets as _sec
+
+    def _try(fn):
+        try:
+            return fn()
+        except Exception:
+            return None
+
+    trade_token = _try(_sec.get_access_token)
+    data_token = _try(_sec.get_data_token)
+    data_api_key = _try(_sec.get_data_api_key)
+    api_secret = _try(_sec.get_data_api_secret)
+    client_id = _try(_sec.get_client_id)
+
+    return {
+        "trade_token": bool(trade_token and trade_token.startswith("eyJ")),
+        "data_token": bool(data_token),
+        "data_api_key": bool(data_api_key),
+        "data_api_secret": bool(api_secret),
+        "client_id": bool(client_id),
+    }
+
+
 def _dhan_probe() -> Dict[str, Any]:
     """Probe Dhan with stored credentials; report what actually came back.
 
@@ -751,21 +791,19 @@ def _dhan_probe() -> Dict[str, Any]:
 
     trade_token = _try(_sec.get_access_token)
     data_token = _try(_sec.get_data_token)
+    data_api_key = _try(_sec.get_data_api_key)
     api_secret = _try(_sec.get_data_api_secret)
     client_id = _try(_sec.get_client_id)
 
     # /charts/* is served against the DATA credential, not the trading
     # token — probing the wrong one reports "unconfigured" while the real
-    # blocker is an expired data subscription. Prefer data, fall back.
+    # blocker is an expired data subscription. get_data_token() already
+    # validates the data key (JWT + length) and falls back to the trade JWT,
+    # so an 8-char app-id can never become the Access-Token header here.
     token = data_token or trade_token
-    used = "data" if data_token else ("trade" if trade_token else None)
+    used = ("data_token" if data_token else ("trade" if trade_token else None))
 
-    configured = {
-        "trade_token": bool(trade_token and trade_token.startswith("eyJ")),
-        "data_token": bool(data_token and data_token.startswith("eyJ")),
-        "data_api_key": bool(_try(_sec.get_data_api_key)),
-        "client_id": bool(client_id),
-    }
+    configured = _dhan_configured()
     if not token:
         return {"configured": configured, "working": False,
                 "status": "unconfigured", "probed_with": None,
@@ -782,7 +820,7 @@ def _dhan_probe() -> Dict[str, Any]:
             json={"securityId": "2885", "exchangeSegment": "NSE_EQ",
                   "instrument": "EQUITY", "fromDate": "2026-07-20",
                   "toDate": "2026-07-23"},
-            headers=headers, timeout=10, verify=False,
+            headers=headers, timeout=(3, 5), verify=False,
         )
         code = r.status_code
     except Exception as e:
@@ -817,13 +855,21 @@ def _dhan_probe_cached(refresh: bool = False) -> Dict[str, Any]:
 
 @app.get("/api/dhan-live-status")
 async def dhan_live_status(refresh: bool = False):
-    """Live Dhan connection state - probed, never inferred from file presence."""
+    """Live Dhan connection state - probed, never inferred from file presence.
+
+    `configured` (which creds are stored) is a local read and is ALWAYS
+    included — even when the live probe times out — so the config form's
+    (stored)/(missing) labels stay truthful regardless of Dhan latency.
+    """
     try:
-        return await _run(lambda: _dhan_probe_cached(refresh))
+        return await _run(lambda: _dhan_probe_cached(refresh),
+                          timeout=_DHAN_PROBE_TIMEOUT_SEC)
     except RunTimeout as e:
-        return {"working": False, "status": "timeout", "message": str(e)}
+        return {"configured": _dhan_configured(), "working": False,
+                "status": "timeout", "message": str(e)}
     except Exception as e:
-        return {"working": False, "status": "error", "message": str(e)}
+        return {"configured": _dhan_configured(), "working": False,
+                "status": "error", "message": str(e)}
 
 
 @app.get("/api/paper-book")
@@ -1360,6 +1406,7 @@ async def save_token(body: dict):
     try:
         from core import secrets as sec
         sec.save_access_token(token)
+        _CACHE.pop("dhanlive", None)  # force a fresh probe with the new creds
         th = sec.token_health(token)
         return {"status": "saved", "hours_left": th.hours_left, "valid": th.valid}
     except Exception as e:
@@ -1374,6 +1421,7 @@ async def save_client_id(body: dict):
     try:
         from core import secrets as sec
         sec.save_client_id(cid)
+        _CACHE.pop("dhanlive", None)  # force a fresh probe with the new creds
         return {"status": "saved"}
     except Exception as e:
         return {"error": str(e)}
@@ -1387,6 +1435,7 @@ async def save_data_key(body: dict):
     try:
         from core import secrets as sec
         sec.save_data_api_key(key)
+        _CACHE.pop("dhanlive", None)  # force a fresh probe with the new creds
         return {"status": "saved"}
     except Exception as e:
         return {"error": str(e)}

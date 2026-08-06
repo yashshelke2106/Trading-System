@@ -336,7 +336,8 @@ def get_data_token() -> str:
     """
     key = get_data_api_key()
     # Real Dhan Data API tokens are JWTs (~300 chars). Anything shorter is
-    # likely an app_id, partial paste, or stale placeholder — fall back.
+    # likely an app_id, partial paste, or stale placeholder — fall back to
+    # the trading JWT rather than authenticating with a value Dhan will 401.
     if key and len(key) >= 30 and key.startswith("eyJ"):
         return key
     return get_access_token()
