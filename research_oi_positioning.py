@@ -20,6 +20,35 @@ The four states must separate FORWARD returns, and LONG BUILDUP must beat
 SHORT BUILDUP by more than costs. Anything else means the label is describing
 the past (which it certainly does) without predicting the future.
 
+RESULT ON THE FULL 2-YEAR ARCHIVE (497 trading days, 2024-08 .. 2026-08)
+------------------------------------------------------------------------
+    state             hold        n   excess%       t   hit%
+    LONG_BUILDUP         3    8,876    -0.049   -1.29   47.7
+    SHORT_COVERING       3   18,714    -0.023   -0.98   47.8
+    SHORT_BUILDUP        3   10,096    -0.010   -0.29   49.0
+    LONG_UNWINDING       3   16,932    +0.023    0.83   49.7
+
+    LONG_BUILDUP minus SHORT_BUILDUP:  1d -0.015%   2d -0.046%   3d -0.039%
+    net of 23.6bps costs:              1d -0.251%   2d -0.281%   3d -0.275%
+
+Two things are true at once and both matter:
+
+1. The SIGN is consistently inverted from the textbook -- the "bullish"
+   LONG_BUILDUP is the worst state at every horizon and the "bearish"
+   LONG_UNWINDING is the best, in both the 163-day and 497-day samples.
+2. The MAGNITUDE is not significant. Every |t| < 2 on cells of 8,000-18,000
+   observations, so this is small, not underpowered.
+
+An earlier read on 163 days showed LONG_BUILDUP at -0.321% with t=-2.37 and
+was flagged preliminary. The full sample cut it ~6x and removed the
+significance. Trust this block, not that one -- and treat any short-window
+F&O result with the same suspicion.
+
+Practical verdict: the classic OI interpretation carries no tradeable edge,
+and acting on it costs about 0.25-0.28% per round trip. Consistent with the
+mean-reversion after strong up days already measured twice here (H-017
+earnings momentum, and the gap-fade study).
+
 DISCIPLINE
 ----------
 - Near-month contract only, and rolled: OI collapses into expiry, so a raw
