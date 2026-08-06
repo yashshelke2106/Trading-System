@@ -56,7 +56,12 @@ def load_pit_panels() -> tuple:
         if d.empty:
             continue
         ts = pd.Timestamp(d["date"].iloc[0])
-        d = d.drop_duplicates("symbol").set_index("symbol")
+        d = d.drop_duplicates("symbol")
+        # Rights entitlements / warrants expire worthless by construction; a
+        # ranking that includes them "discovers" an untradeable decay effect.
+        from core.corporate_actions import is_tradeable_equity_symbol
+        d = d[d["symbol"].map(is_tradeable_equity_symbol)]
+        d = d.set_index("symbol")
         closes[ts] = d["close"]
         turns[ts] = d["close"] * d["volume"]
     close = pd.DataFrame(closes).T.sort_index()
@@ -96,6 +101,15 @@ def backtest(close: pd.DataFrame, turn: pd.DataFrame, cost_bps: float) -> pd.Dat
 
         formation = (p_skip[universe] / p_start[universe]) - 1.0
         formation = formation.replace([np.inf, -np.inf], np.nan).dropna()
+        # Drop names whose formation window spans a suspected split/bonus: the
+        # raw price break is not a return and would rank them as extreme
+        # winners or losers. Measured: 296 such events per 400 trading days,
+        # including large names (NMDC, MAZDOCK).
+        from core.corporate_actions import looks_like_corporate_action
+        keep = [s for s in formation.index
+                if not looks_like_corporate_action(float(p_start[s]), float(p_skip[s]))
+                and not looks_like_corporate_action(float(px_now[s]), float(px_next[s]))]
+        formation = formation.loc[keep]
         n = len(formation)
         if n < 20:
             continue
