@@ -84,6 +84,24 @@ def _cached(key: str, ttl: float, loader):
     return val
 
 
+def _json_safe(obj):
+    """Recursively replace non-finite floats (NaN/inf) with None.
+
+    FastAPI's JSON encoder raises ValueError("Out of range float values are not
+    JSON compliant") on NaN, which turns one empty metric into a 500 and a blank
+    panel. pandas is the usual source: `df.where(df.notna(), other=None)` does
+    NOT strip NaN from float columns — None is coerced straight back to NaN.
+    """
+    import math
+    if isinstance(obj, float):
+        return None if (math.isnan(obj) or math.isinf(obj)) else obj
+    if isinstance(obj, dict):
+        return {k: _json_safe(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_json_safe(v) for v in obj]
+    return obj
+
+
 class RunTimeout(Exception):
     """A loader exceeded its deadline. Endpoints turn this into a payload."""
 
@@ -640,11 +658,11 @@ async def get_accuracy():
         except Exception:
             pass
 
-        return {
+        return _json_safe({
             "records":     records,
             "pnl_summary": pnl_summary,
             "tracking":    tracking or [],
-        }
+        })
 
     try:
         data = await _run(_load)

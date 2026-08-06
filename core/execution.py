@@ -469,8 +469,11 @@ class ExecutionEngine:
         lots = floor( (capital * risk%) / (per-unit risk * lot_size) ), min 1 lot.
         This gives EVEN rupee risk per trade instead of a flat 1-lot everywhere.
         """
-        lot_size = int(getattr(config, 'NSE_LOT_SIZES', {}).get(symbol.upper(), 1))
-        lot_size = max(lot_size, 1)
+        # LIVE lot size first. config.NSE_LOT_SIZES is stale (measured 2026-08-06:
+        # 34 of 62 entries wrong, 81 F&O names absent entirely -> they silently
+        # fell back to 1, which makes `lots` and therefore the rupee risk wrong).
+        from core.futures_leg import lot_size_for
+        lot_size = max(int(lot_size_for(symbol)), 1)
         risk_per_unit = abs(entry - sl)
         if risk_per_unit <= 0:
             return lot_size  # 1 lot fallback
@@ -488,7 +491,10 @@ class ExecutionEngine:
             return 0
         risk_pct = config.RISK_CONFIG['max_risk_per_trade']
         raw = int(capital * risk_pct / premium)
-        lot_size = getattr(config, 'NSE_LOT_SIZES', {}).get(symbol, 1)
+        # LIVE lot size first — see _calculate_futures_quantity. An option order
+        # for a non-multiple of the lot is rejected by the exchange outright.
+        from core.futures_leg import lot_size_for
+        lot_size = int(lot_size_for(symbol)) if symbol else 1
         if lot_size <= 1:
             return max(1, raw)
         return max(lot_size, (raw // lot_size) * lot_size)
