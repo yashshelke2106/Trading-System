@@ -68,6 +68,27 @@ Still true from the outage era: `core/market_bias.py` synthetic-frame guard
 fallback remain in place as defenses. `core/market_feed.py` WebSocket order-flow
 queues were not re-verified live — re-probe before relying on order flow / L2.
 
+Verified 2026-08-06: Dhan historical serves a **full 10 years** of daily bars
+(2,623 from 2016-01-01; `dhan_daily(days_back=3650)` → 2,476 rows). It is NOT
+depth-capped. HTTP 400 storms are a **symbol-rename** problem, not auth:
+`get_security_id()` passes the SYMBOL itself when the scrip-master lookup
+misses, and Dhan rejects that. Aliases live in `core/scrip_master.py`
+`_RENAMES` (TATAMOTORS→TMCV, MCDOWELL-N→UNITDSPR, IDFC→IDFCFIRSTB,
+HPCL→HINDPETRO). LTIM and GUJGASLTD are genuinely delisted —
+`DELISTED_NO_SUCCESSOR`; prune them from FO_UNIVERSE.
+
+Deep history for research comes from the **local archive**, not the backtest:
+`python -m scripts.build_history_archive --refresh --period 10yr` →
+`data/history/` (357k bars / 153 symbols, real OHLC). `backtest_india_swing.py`
+is Dhan-only by design and does NOT read that archive.
+
+**The ML filter is deliberately OFF.** `logs/ml_filter_model.REJECTED_2026-08-06.pkl`
+was measured on holdout as *worse than useless*: gating at P≥0.55 gave
+−3.04%/trade vs −1.20% ungated (accuracy 0.474 vs a 0.868 always-loss
+baseline). `check_ml_filter()` fails OPEN, so no model file = pass-through =
+the safe state. Do not retrain on `backtest_india_swing_trades.csv` — it holds
+~126 usable rows and the base signal is net-negative.
+
 Data sources (yfinance fallbacks still valid when Dhan hiccups):
 | Source | Status |
 |---|---|
