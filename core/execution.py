@@ -1,3 +1,4 @@
+import logging
 import pandas as pd
 import numpy as np
 import time
@@ -7,6 +8,8 @@ from dataclasses import dataclass
 import config
 from .risk_engine import Position, RiskEngine, Trade
 from .strike_selection import StrikeRecommendation
+
+log = logging.getLogger(__name__)
 
 _IST = timezone(timedelta(hours=5, minutes=30))
 
@@ -394,19 +397,42 @@ class ExecutionEngine:
         target_price = (entry_price + sl_distance * min_rr if direction == "long"
                         else entry_price - sl_distance * min_rr)
 
-        if use_options:
-            quantity = self._calculate_option_quantity(capital, strike.premium, symbol)
-            option_strike = strike.strike_price
-            option_type = strike.option_type
-            entry_with_slip = entry_price
-            premium = strike.premium
-        elif use_futures:
-            # Trade in lot multiples; risk-based lots if available, else 1 lot.
-            quantity = self._calculate_futures_quantity(capital, entry_price, sl_price, symbol)
-            option_strike = None
-            option_type = None
-            entry_with_slip = self.calculate_slippage(entry_price, direction)
-            premium = 0
+        if use_options or use_futures:
+            # ONE ordered pipeline for F&O: liquidity -> fundable -> live lot
+            # -> risk budget -> breach. These three branches used to size
+            # independently and disagreed: two read the stale
+            # config.NSE_LOT_SIZES (34 of 62 entries wrong, 81 names missing,
+            # which silently became lot size 1) while a third read the live
+            # scrip master, and none asked whether the account could post the
+            # margin -- so the system emitted signals a broker rejects at the
+            # order window. See core/sizing.py.
+            from core.sizing import decide as _size
+            _d = _size(
+                symbol, entry_price, sl_price, capital,
+                instrument="option_long" if use_options else "futures",
+                premium=strike.premium if use_options else None,
+                require_liquidity=getattr(config, "ENFORCE_LIQUIDITY_TIER", True),
+            )
+            self.last_size_decision = _d
+            if not _d.ok:
+                # A veto is information. Silence here is indistinguishable
+                # from "no signal today", which is how unfundable trades used
+                # to look like an idle scanner.
+                log.info(f"[SIZE] {symbol} skipped: {_d.reason}")
+                return None
+            if _d.risk_breach_multiple:
+                log.warning(f"[SIZE] {symbol} {_d.reason}")
+            quantity = _d.quantity
+            if use_options:
+                option_strike = strike.strike_price
+                option_type = strike.option_type
+                entry_with_slip = entry_price
+                premium = strike.premium
+            else:
+                option_strike = None
+                option_type = None
+                entry_with_slip = self.calculate_slippage(entry_price, direction)
+                premium = 0
         else:
             quantity = self.risk.calculate_quantity(capital, entry_price, sl_price, symbol=symbol)
             option_strike = None

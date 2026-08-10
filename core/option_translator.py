@@ -402,6 +402,28 @@ def get_option_rec(
 
         rr = (target_prem - ltp) / (ltp - sl_prem) if ltp > sl_prem else 0.0
 
+        # ── Theta hurdle ──────────────────────────────────────────────────
+        # A long option is a race between delta (pays when the underlying
+        # moves your way) and theta (charges you daily regardless), so the
+        # decisive number before entry is the drift needed to break even:
+        #     required_daily_move = |theta_per_day| / delta
+        # Measured 2026-08-06: RELIANCE ATM 19 DTE needs 0.100%/day while the
+        # whole market supplies 0.0982%/day, which is why buying premium
+        # measured PF 0.44. Reported on every leg so the caller can see the
+        # hurdle rather than infer it from theta alone.
+        req_move_pct = None
+        theta_pct_day = None
+        try:
+            _theta_day = float(getattr(greeks, "theta", 0.0) or 0.0)
+            if abs(_theta_day) > ltp:      # an annualised figure dwarfs premium
+                _theta_day /= 365.0
+            if ltp > 0:
+                theta_pct_day = round(abs(_theta_day) / ltp * 100, 3)
+            if abs_delta > 1e-6 and spot > 0:
+                req_move_pct = round(abs(_theta_day) / abs_delta / spot * 100, 4)
+        except Exception:
+            pass
+
         return {
             "strike":      strike,
             "expiry":      expiry_date.strftime("%Y-%m-%d"),
@@ -417,6 +439,8 @@ def get_option_rec(
             "theta":       round(greeks.theta, 3) if hasattr(greeks, 'theta') else None,
             "iv_pct":      round(iv_used * 100, 1),
             "iv_rank":     round(iv_rank, 1) if iv_rank is not None else None,
+            "theta_pct_day":     theta_pct_day,   # % of premium lost per day
+            "required_move_pct": req_move_pct,    # daily drift to break even
             "rr":          round(rr, 2),
             "bid":         round(bid, 2) if bid > 0 else None,
             "ask":         round(ask, 2) if ask > 0 else None,

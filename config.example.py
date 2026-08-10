@@ -32,6 +32,16 @@ USE_MOCK_DATA = False
 # Paper-trade mode: real market data, simulated order fills (no real orders)
 PAPER_TRADE = True
 
+# Refuse F&O trades in names below the measured liquidity floor for the
+# instrument (core/selection.py: options >= Rs 500 Cr/day, futures >= 300 Cr).
+# Options are quoted per STRIKE, so their spreads widen far faster than the
+# underlying's as turnover falls -- an option on a Rs 261 Cr/day name is a
+# different instrument from one on HDFCBANK.
+# This NARROWS the tradeable set (151 F&O names -> 40 futures / 16 options).
+# Set False to size on the full universe and keep the older behaviour.
+# Absent from config.py, the code defaults to True.
+ENFORCE_LIQUIDITY_TIER = True
+
 # Honest paper-fill cost (basis points). A paper fill is priced off the LIVE
 # quote and CROSSES the spread + slippage by this many bps — never the requested
 # price (that perfect-fill assumption is the mirage that inflated old results).

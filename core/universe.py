@@ -1,4 +1,16 @@
-"""Shared F&O universe used by runner, scanner, and dashboards."""
+"""Shared F&O universe used by runner, scanner, and dashboards.
+
+LTIM and GUJGASLTD were REMOVED 2026-08-06: absent from Dhan's scrip master
+AND from yfinance, with no successor row to alias to, so every fetch for them
+failed silently. Do not re-add without checking scrip_master.lookup() first.
+
+Prefer `core.selection.universe(tier)` over these constants for anything that
+places or sizes a trade. This list says nothing about HOW liquid a name is --
+it ranked a Rs 261 Cr/day name alongside a Rs 2,322 Cr/day one -- while
+selection reads measured turnover and returns the tier appropriate to the
+instrument. These constants remain for callers that genuinely want the whole
+F&O set (archive builders, research sweeps).
+"""
 
 FO_UNIVERSE = [
     "RELIANCE", "TCS", "INFY", "HDFCBANK", "ICICIBANK",
@@ -10,14 +22,14 @@ FO_UNIVERSE = [
     "TATASTEEL", "HINDALCO", "GRASIM", "CIPLA", "DIVISLAB",
     "DRREDDY", "BRITANNIA", "NESTLEIND", "TATACONSUM", "M&M",
     "BAJAJ-AUTO", "INDUSINDBK", "TECHM", "ADANIPORTS", "BAJAJFINSV",
-    "HDFCLIFE", "LTIM", "SHRIRAMFIN", "TRENT", "APOLLOHOSP",
+    "HDFCLIFE", "SHRIRAMFIN", "TRENT", "APOLLOHOSP",
     "ABB", "ALKEM", "AMBUJACEM", "APOLLOTYRE", "AUROPHARMA",
     "BANDHANBNK", "BANKBARODA", "BEL", "BERGEPAINT", "BHARATFORG",
     "BHEL", "BIOCON", "BOSCHLTD", "CANBK", "CEATLTD",
     "CHOLAFIN", "COLPAL", "CONCOR", "COROMANDEL", "DABUR",
     "DLF", "DMART", "ESCORTS", "EXIDEIND", "FEDERALBNK",
     "GAIL", "GLENMARK", "GODREJCP", "GODREJPROP", "GRANULES",
-    "GUJGASLTD", "HAVELLS", "HINDPETRO", "ICICIPRULI", "ICICIGI",
+    "HAVELLS", "HINDPETRO", "ICICIPRULI", "ICICIGI",
     "IDFCFIRSTB", "IGL", "INDHOTEL", "INDIGO", "INDUSTOWER",
     "IPCALAB", "IRCTC", "IRFC", "JINDALSTEL", "JIOFIN",
     "LALPATHLAB", "LAURUSLABS", "LICHSGFIN", "LICI",
@@ -40,8 +52,8 @@ FO_UNIVERSE = [
 # This is the swing-trade universe: high volume => tight spreads + reliable
 # delivery fills, which is what actually matters holding across days. The
 # #100 name still trades ~Rs150 Cr/day. Regenerate with scripts/rebuild_liquid_universe.py
-# whenever the cache is refreshed. Note: TATAMOTORS and LTIM are liquid F&O
-# names currently excluded only due to a bar_cache gap — re-add once cached.
+# whenever the cache is refreshed. TATAMOTORS is excluded only by a bar_cache
+# gap and can be re-added once cached. LTIM cannot: see the header note.
 TOP100_LIQUID = [
     "HDFCBANK", "RELIANCE", "ICICIBANK", "BHARTIARTL", "INFY",
     "SBIN", "ETERNAL", "TCS", "M&M", "LT",
