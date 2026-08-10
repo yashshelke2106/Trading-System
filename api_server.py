@@ -27,6 +27,7 @@ import csv
 import json
 import os
 import sys
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
@@ -794,9 +795,23 @@ def _dhan_probe() -> Dict[str, Any]:
 
     Presence of a token file is NOT liveness — the expired subscription kept
     showing "Active" for exactly that reason. One cheap authenticated call:
-      401            -> expired / invalid subscription
-      200            -> working
-      other non-401  -> auth accepted, request-shape issue (sub is alive)
+      200  -> working
+      401  -> expired / invalid subscription        (terminal)
+      429  -> RATE LIMITED, nothing wrong with you  (transient)
+      5xx  -> Dhan side                             (transient)
+      else -> auth accepted, request shape rejected (DH-905 class)
+
+    429 used to fall into the catch-all and was reported as "request shape
+    rejected (DH-905 class) - subscription alive", which is the opposite
+    diagnosis: the request was fine, it was sent too often. That message sent
+    people hunting a schema bug while the real cause was the scanner and this
+    probe competing for the same endpoint.
+
+    Which is the second fix: the probe used /charts/historical, the exact path
+    scan_universe hammers under a 1-req/sec global limit, so a running scan
+    reliably 429'd the probe. It now uses /optionchain/expirylist — cheap,
+    authenticated, and on a different bucket — and stands down entirely while
+    a shared chart/option-chain backoff is in force rather than adding to it.
     """
     import requests as rq
     from core import secrets as _sec
@@ -832,43 +847,131 @@ def _dhan_probe() -> Dict[str, Any]:
     if api_secret:
         headers["api-secret"] = api_secret
 
+    # Do not add load while the scanner is already backing off — probing into
+    # an active rate limit guarantees the 429 it is meant to detect.
+    try:
+        import time as _t
+        from core.api_dhan import _shared_backoff_get
+        wait = max(_shared_backoff_get("chart"), _shared_backoff_get("oc")) - _t.time()
+        if wait > 0:
+            return {"configured": configured, "working": False,
+                    "status": "rate_limited", "transient": True,
+                    "probed_with": used, "retry_after": round(wait),
+                    "message": (f"Dhan rate limit active for another {wait:.0f}s "
+                                "(scanner is using the quota) - not a credential "
+                                "problem, retrying automatically")}
+    except Exception:
+        pass
+
     try:
         r = rq.post(
-            "https://api.dhan.co/v2/charts/historical",
-            json={"securityId": "2885", "exchangeSegment": "NSE_EQ",
-                  "instrument": "EQUITY", "fromDate": "2026-07-20",
-                  "toDate": "2026-07-23"},
-            headers=headers, timeout=(3, 5), verify=False,
+            "https://api.dhan.co/v2/optionchain/expirylist",
+            json={"UnderlyingScrip": 13, "UnderlyingSeg": "IDX_I"},
+            headers=headers, timeout=(3, 6), verify=False,
         )
         code = r.status_code
     except Exception as e:
         return {"configured": configured, "working": False,
-                "status": "unreachable", "probed_with": used,
-                "message": f"probe failed: {type(e).__name__}"}
+                "status": "unreachable", "transient": True,
+                "probed_with": used,
+                "message": f"probe failed: {type(e).__name__} - retrying automatically"}
 
+    if code == 200:
+        return {"configured": configured, "working": True, "http": code,
+                "status": "working", "probed_with": used,
+                "message": "Dhan data API responding"}
     if code == 401:
         return {"configured": configured, "working": False, "http": code,
                 "status": "expired", "probed_with": used,
                 "message": ("Dhan returned 401 - subscription expired or "
                             "token invalid. Live scanning stays idle "
                             "until a valid token is saved.")}
-    if code == 200:
-        return {"configured": configured, "working": True, "http": code,
-                "status": "working", "probed_with": used,
-                "message": "Dhan data API responding"}
+    if code == 429:
+        try:
+            retry = float(r.headers.get("Retry-After", 30))
+        except Exception:
+            retry = 30.0
+        return {"configured": configured, "working": False, "http": code,
+                "status": "rate_limited", "transient": True,
+                "probed_with": used, "retry_after": round(retry),
+                "message": (f"HTTP 429 - too many requests, retry in {retry:.0f}s. "
+                            "Credentials are fine; the scanner and this check "
+                            "share one quota.")}
+    if code >= 500:
+        return {"configured": configured, "working": False, "http": code,
+                "status": "dhan_down", "transient": True, "probed_with": used,
+                "message": f"HTTP {code} from Dhan - their side, retrying automatically"}
     return {"configured": configured, "working": False, "http": code,
             "status": "auth_ok_shape_issue", "probed_with": used,
             "message": (f"HTTP {code}: auth accepted but request shape "
                         "rejected (DH-905 class) - subscription alive")}
 
 
+# Last known probe result, kept so the UI is never blanked by one bad call.
+_PROBE: Dict[str, Any] = {"result": None, "at": 0.0, "inflight": False}
+_PROBE_LOCK = threading.Lock()
+
+# A working probe is good for a while. A 401 is a real answer, so re-check
+# occasionally rather than constantly. A 429/timeout says nothing at all, so
+# expire it fast — otherwise one rate-limited call made the dashboard look
+# broken for the full cache window even after credentials were fixed.
+_TTL_OK = 900.0
+_TTL_TERMINAL = 120.0
+_TTL_TRANSIENT = 20.0
+
+
+def _ttl_for(result: Dict[str, Any]) -> float:
+    if result.get("working"):
+        return _TTL_OK
+    if result.get("transient"):
+        return _TTL_TRANSIENT
+    return _TTL_TERMINAL
+
+
+def _probe_now() -> Dict[str, Any]:
+    """Run the probe and store it, guarding against duplicate concurrent runs."""
+    try:
+        res = _dhan_probe()
+    except Exception as e:                     # never poison the cache
+        res = {"configured": _dhan_configured(), "working": False,
+               "status": "error", "transient": True, "message": str(e)}
+    with _PROBE_LOCK:
+        _PROBE["result"] = res
+        _PROBE["at"] = time.monotonic()
+        _PROBE["inflight"] = False
+    return res
+
+
 def _dhan_probe_cached(refresh: bool = False) -> Dict[str, Any]:
-    """Probe result, cached 15 min. The shared warm path for every
-    Dhan-dependent endpoint, so none of them has to guess whether the
-    subscription is alive."""
-    if refresh:
-        _CACHE.pop("dhanlive", None)
-    return _cached("dhanlive", 900, _dhan_probe)
+    """Stale-while-revalidate. Returns immediately, always.
+
+    The old version called the network inside the request and cached whatever
+    came back for 15 minutes. Two consequences the dashboard actually suffered:
+    saving credentials blocked on a live call and showed TIMEOUT when Dhan was
+    slow, and a single 429 pinned "broken" for 15 minutes even after the
+    credentials were corrected.
+
+    Now a fresh result is served from memory, a stale one is served while a
+    refresh runs in the background, and only a cold start ever waits.
+    """
+    with _PROBE_LOCK:
+        cached = _PROBE["result"]
+        age = time.monotonic() - _PROBE["at"] if cached else None
+        fresh = cached is not None and age < _ttl_for(cached)
+        if cached and fresh and not refresh:
+            return {**cached, "age_sec": round(age), "stale": False}
+        already = _PROBE["inflight"]
+        if not already:
+            _PROBE["inflight"] = True
+
+    if cached is None:
+        return _probe_now()                    # cold start: one honest wait
+
+    if not already:
+        threading.Thread(target=_probe_now, daemon=True,
+                         name="dhan-probe").start()
+    return {**cached, "age_sec": round(age), "stale": True,
+            "refreshing": True}
 
 
 @app.get("/api/dhan-live-status")
@@ -1414,6 +1517,23 @@ async def submit_feedback(body: dict):
 
 # ── Credentials config ────────────────────────────────────────────────────────
 
+def _invalidate_probe() -> None:
+    """Forget the stored verdict and start a fresh probe in the background.
+
+    Saving credentials used to clear a cache and then BLOCK on a live probe,
+    so a slow or rate-limited Dhan turned "save" into a 10-second wait ending
+    in TIMEOUT -- while the credentials had in fact been written correctly.
+    The save now returns as soon as the write succeeds and the UI watches the
+    probe state, which is the part that can legitimately take time.
+    """
+    with _PROBE_LOCK:
+        _PROBE["result"] = None
+        _PROBE["at"] = 0.0
+    _CACHE.pop("dhanlive", None)
+    threading.Thread(target=_probe_now, daemon=True,
+                     name="dhan-probe-after-save").start()
+
+
 @app.post("/api/config/token")
 async def save_token(body: dict):
     token = (body.get("token") or "").strip()
@@ -1424,7 +1544,7 @@ async def save_token(body: dict):
     try:
         from core import secrets as sec
         sec.save_access_token(token)
-        _CACHE.pop("dhanlive", None)  # force a fresh probe with the new creds
+        _invalidate_probe()   # new creds: drop the old verdict, re-probe async
         th = sec.token_health(token)
         return {"status": "saved", "hours_left": th.hours_left, "valid": th.valid}
     except Exception as e:
@@ -1439,7 +1559,7 @@ async def save_client_id(body: dict):
     try:
         from core import secrets as sec
         sec.save_client_id(cid)
-        _CACHE.pop("dhanlive", None)  # force a fresh probe with the new creds
+        _invalidate_probe()   # new creds: drop the old verdict, re-probe async
         return {"status": "saved"}
     except Exception as e:
         return {"error": str(e)}
@@ -1453,7 +1573,7 @@ async def save_data_key(body: dict):
     try:
         from core import secrets as sec
         sec.save_data_api_key(key)
-        _CACHE.pop("dhanlive", None)  # force a fresh probe with the new creds
+        _invalidate_probe()   # new creds: drop the old verdict, re-probe async
         return {"status": "saved"}
     except Exception as e:
         return {"error": str(e)}

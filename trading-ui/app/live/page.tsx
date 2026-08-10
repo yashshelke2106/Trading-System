@@ -75,6 +75,13 @@ interface LiveStatus {
   http?: number
   probed_with?: string | null
   message?: string
+  // A transient state (429, timeout, Dhan 5xx) says nothing about your
+  // credentials and clears itself. It must not be painted like a 401.
+  transient?: boolean
+  retry_after?: number
+  stale?: boolean
+  refreshing?: boolean
+  age_sec?: number
 }
 interface Signal {
   symbol?: string; direction?: string; entry_price?: number; sl_price?: number
@@ -134,21 +141,44 @@ export default function LivePage() {
   async function save(kind: "token" | "client" | "key") {
     setSaveMsg(null)
     try {
+      // The write is the only part that can fail for a credential reason, so
+      // it is the only part we await. Previously the handler also awaited a
+      // live probe, which turned a successful save into "TIMEOUT" whenever
+      // Dhan was slow or rate-limited -- the credential was stored, but the
+      // UI reported failure. The backend now re-probes in the background and
+      // we watch for the answer instead of blocking on it.
       if (kind === "token" && tokenIn.trim()) await postToken(tokenIn.trim())
       if (kind === "client" && clientIn.trim()) await postClientId(clientIn.trim())
       if (kind === "key" && keyIn.trim()) await postDataKey(keyIn.trim())
-      setSaveMsg("saved — re-probing…")
+      setSaveMsg("saved — checking connection…")
       setProbing(true)
-      await load(true)
+      // Poll briefly for the background probe to land. Every tick refreshes
+      // `configured`, so the (stored)/(missing) labels update immediately even
+      // while the connection verdict is still pending.
+      for (let i = 0; i < 12; i++) {
+        await new Promise(r => setTimeout(r, 2_000))
+        const s = await fetch(`${BASE}/api/dhan-live-status`, { cache: "no-store" })
+          .then(r => r.json()).catch(() => null)
+        if (s) setLive(s)
+        if (s && !s.refreshing && s.status !== "timeout") {
+          setSaveMsg(s.working ? "saved — connection live"
+                               : `saved — ${s.status ?? "checking"}`)
+          break
+        }
+      }
       setProbing(false)
-      setSaveMsg("saved")
+      void load()
     } catch (e) {
       setSaveMsg(`save failed: ${String(e)}`)
     }
   }
 
   const st = live?.status ?? "…"
-  const stColor = live?.working ? GREEN : st === "auth_ok_shape_issue" ? AMBER : RED
+  // A transient state is amber, never red: 429 / timeout / Dhan 5xx clear
+  // themselves and say nothing about the credentials. Painting them red is
+  // what made a passing rate limit look like a broken subscription.
+  const stColor = live?.working ? GREEN
+    : (live?.transient || st === "auth_ok_shape_issue") ? AMBER : RED
   const byGrade = (sig?.by_grade ?? {}) as Record<string, Signal[]>
   const sigTs = sig?.ts as string | undefined
   const age = ageMinutes(sigTs)
@@ -166,9 +196,16 @@ export default function LivePage() {
             color: stColor, border: `1px solid ${stColor}`, borderRadius: 6,
             padding: "4px 12px",
           }}>
-            {probing ? "PROBING…" : st.toUpperCase()}{live?.http ? ` (HTTP ${live.http})` : ""}
+            {probing ? "CHECKING…" : st.toUpperCase().replace(/_/g, " ")}
+            {live?.http ? ` (HTTP ${live.http})` : ""}
           </span>
-          <span style={{ color: "var(--txd)", fontSize: ".8em" }}>{live?.message}</span>
+          <span style={{ color: "var(--txd)", fontSize: ".8em" }}>
+            {live?.message}
+            {live?.retry_after ? ` · auto-retry in ${live.retry_after}s` : ""}
+            {live?.stale && !probing
+              ? ` · last checked ${live.age_sec ?? "?"}s ago${live.refreshing ? ", refreshing" : ""}`
+              : ""}
+          </span>
           <button style={BTN} onClick={() => { setProbing(true); load(true).finally(() => setProbing(false)) }}>
             re-probe now
           </button>
