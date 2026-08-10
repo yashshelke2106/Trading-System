@@ -138,6 +138,20 @@ export default function LivePage() {
     return () => clearInterval(t)
   }, [load])
 
+  // A first load (or a return to this page) reports "checking" while the
+  // probe runs in the background. Waiting the full 30s poll for that to
+  // settle is what made a healthy connection look stuck. Re-check every 2s
+  // while the answer is still pending, then stop.
+  const pending = !!live?.refreshing || live?.status === "checking"
+  useEffect(() => {
+    if (!pending) return
+    const t = setInterval(() => {
+      fetch(`${BASE}/api/dhan-live-status`, { cache: "no-store" })
+        .then(r => r.json()).then(setLive).catch(() => {})
+    }, 2_000)
+    return () => clearInterval(t)
+  }, [pending])
+
   async function save(kind: "token" | "client" | "key") {
     setSaveMsg(null)
     try {

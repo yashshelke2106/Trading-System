@@ -16,6 +16,7 @@ Three reported symptoms, three distinct bugs:
       the panel broken long after the credentials were fixed
 """
 
+import asyncio
 import time
 
 import pytest
@@ -121,8 +122,10 @@ def test_warm_reads_are_served_from_memory(monkeypatch):
         return _probe(working=True, status="working")
 
     monkeypatch.setattr(A, "_dhan_probe", _slow)
-    first = A._dhan_probe_cached()
-    assert first["working"] and calls["n"] == 1
+    # A cold start no longer blocks: it returns "checking" and probes in the
+    # background, so prime the cache directly to test the WARM path.
+    A._probe_now()
+    assert calls["n"] == 1
 
     t0 = time.time()
     second = A._dhan_probe_cached()
@@ -181,3 +184,55 @@ def test_invalidate_probe_drops_the_previous_verdict(monkeypatch):
     A._invalidate_probe()
     time.sleep(0.4)
     assert A._dhan_probe_cached()["status"] == "expired"
+
+
+# ── cold start must not block, and TIMEOUT must be unreachable ────────────
+
+def test_cold_start_returns_immediately_against_a_slow_dhan(monkeypatch):
+    """The remaining symptom: navigate away, come back, and the panel showed
+    a red TIMEOUT while the credentials were stored, the scanner was running
+    and the connection was live. An empty cache used to run a live probe
+    inside the request and trip the 10s deadline."""
+    def _very_slow():
+        time.sleep(30)
+        return _probe(working=True)
+
+    monkeypatch.setattr(A, "_dhan_probe", _very_slow)
+    t0 = time.time()
+    out = A._dhan_probe_cached()
+    assert time.time() - t0 < 1.0, "a cold start must not block the request"
+    assert out["status"] == "checking"
+    assert out["transient"] is True and out["refreshing"] is True
+    assert out["configured"] is not None
+
+
+def test_cold_start_never_reports_timeout(monkeypatch):
+    def _very_slow():
+        time.sleep(30)
+        return _probe(working=True)
+    monkeypatch.setattr(A, "_dhan_probe", _very_slow)
+    assert A._dhan_probe_cached()["status"] != "timeout"
+
+
+def test_endpoint_serves_last_known_good_instead_of_a_timeout(monkeypatch):
+    """A slow call must never throw away a verdict already reached."""
+    monkeypatch.setattr(A, "_dhan_probe",
+                        lambda: _probe(working=True, status="working"))
+    A._dhan_probe_cached()
+
+    async def _boom(*a, **k):
+        raise A.RunTimeout("loader exceeded 10s deadline")
+    monkeypatch.setattr(A, "_run", _boom)
+
+    out = asyncio.run(A.dhan_live_status())
+    assert out["status"] == "working", "last known good must survive a timeout"
+    assert out["stale"] is True and out["working"] is True
+
+
+def test_endpoint_reports_checking_when_nothing_is_known_yet(monkeypatch):
+    async def _boom(*a, **k):
+        raise A.RunTimeout("loader exceeded 10s deadline")
+    monkeypatch.setattr(A, "_run", _boom)
+    out = asyncio.run(A.dhan_live_status())
+    assert out["status"] == "checking" and out["transient"] is True
+    assert "configured" in out

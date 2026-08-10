@@ -951,8 +951,13 @@ def _dhan_probe_cached(refresh: bool = False) -> Dict[str, Any]:
     slow, and a single 429 pinned "broken" for 15 minutes even after the
     credentials were corrected.
 
-    Now a fresh result is served from memory, a stale one is served while a
-    refresh runs in the background, and only a cold start ever waits.
+    NOTHING here blocks, including the cold start. That last blocking path is
+    what still produced a red TIMEOUT after navigating back to the page: with
+    an empty cache the request ran a live probe, and a slow or rate-limited
+    Dhan tripped the 10s deadline -- so the panel showed TIMEOUT while the
+    credentials were stored, the scanner was running and the connection was
+    in fact live. A first load now reports "checking" (a transient state) and
+    the answer arrives on the next poll a couple of seconds later.
     """
     with _PROBE_LOCK:
         cached = _PROBE["result"]
@@ -964,12 +969,14 @@ def _dhan_probe_cached(refresh: bool = False) -> Dict[str, Any]:
         if not already:
             _PROBE["inflight"] = True
 
-    if cached is None:
-        return _probe_now()                    # cold start: one honest wait
-
     if not already:
         threading.Thread(target=_probe_now, daemon=True,
                          name="dhan-probe").start()
+
+    if cached is None:
+        return {"configured": _dhan_configured(), "working": False,
+                "status": "checking", "transient": True, "refreshing": True,
+                "message": "checking the Dhan connection…"}
     return {**cached, "age_sec": round(age), "stale": True,
             "refreshing": True}
 
@@ -982,15 +989,30 @@ async def dhan_live_status(refresh: bool = False):
     included — even when the live probe times out — so the config form's
     (stored)/(missing) labels stay truthful regardless of Dhan latency.
     """
+    def _last_known(fallback_status: str, msg: str) -> Dict[str, Any]:
+        """Never throw away a good answer because this one call was slow.
+
+        Reporting a bare TIMEOUT is what let the panel show red while the
+        credentials were stored, the scanner was running and the connection
+        was live. If a verdict was ever reached, serve it and mark it stale.
+        """
+        with _PROBE_LOCK:
+            cached = _PROBE["result"]
+            age = time.monotonic() - _PROBE["at"] if cached else None
+        if cached:
+            return {**cached, "age_sec": round(age), "stale": True,
+                    "refreshing": True}
+        return {"configured": _dhan_configured(), "working": False,
+                "status": fallback_status, "transient": True,
+                "refreshing": True, "message": msg}
+
     try:
         return await _run(lambda: _dhan_probe_cached(refresh),
                           timeout=_DHAN_PROBE_TIMEOUT_SEC)
-    except RunTimeout as e:
-        return {"configured": _dhan_configured(), "working": False,
-                "status": "timeout", "message": str(e)}
+    except RunTimeout:
+        return _last_known("checking", "still checking the Dhan connection…")
     except Exception as e:
-        return {"configured": _dhan_configured(), "working": False,
-                "status": "error", "message": str(e)}
+        return _last_known("error", str(e))
 
 
 @app.get("/api/paper-book")
