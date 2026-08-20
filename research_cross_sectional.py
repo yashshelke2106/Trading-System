@@ -209,7 +209,11 @@ def main():
         verdict = "thin"
         if si and so and si["n"] >= 6 and so["n"] >= 6:
             if so["t"] >= 2.0 and si["t"] >= 1.0 and si["mean_m"] > 0 and so["mean_m"] > 0:
-                verdict = ">>> REAL EDGE (OOS t>=2, both +)"
+                # A LABEL this script can print, not a registry verdict. No
+                # cross-sectional hypothesis has closed as a PASS; anything
+                # reaching this branch still owes a pre-registration and the
+                # gates in core/research_gates.py.
+                verdict = ">>> CANDIDATE (OOS t>=2, both +) - needs registry"
             elif so["t"] >= 1.5 and si["mean_m"] > 0:
                 verdict = "suggestive (OOS t>=1.5)"
             elif si["mean_m"] > 0.3 and so["t"] < 0.5:

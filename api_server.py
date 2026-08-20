@@ -33,7 +33,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
 # ── Path setup ────────────────────────────────────────────────────────────────
@@ -1603,8 +1603,46 @@ async def get_learning():
         return {"error": str(e)}
 
 
+
+# ── Mutating-endpoint guard ──────────────────────────────────────────────────
+# Six POST endpoints write real state - Dhan credentials among them - and none
+# of them checked anything. The saving grace is the loopback bind, so the
+# exposure has been "any local process" rather than "the network". That is an
+# acceptable trade for a desktop tool and a catastrophic one the moment
+# API_HOST is widened, which the launcher makes a one-variable mistake.
+#
+# So: unchanged on loopback (no token needed, nothing to configure), and
+# FAIL CLOSED off-loopback unless an API_TOKEN is set and presented. The
+# dangerous configuration now has to be deliberate instead of accidental.
+def _is_loopback_bind() -> bool:
+    host = os.getenv("API_HOST", "127.0.0.1").strip()
+    return host in ("127.0.0.1", "localhost", "::1", "")
+
+
+def _require_write_auth(request: Request) -> None:
+    """Raise 401/403 unless this mutating call is allowed."""
+    token = (os.getenv("API_TOKEN") or "").strip()
+    if token:
+        sent = (request.headers.get("X-API-Token") or "").strip()
+        if not sent or not secrets_compare(sent, token):
+            raise HTTPException(status_code=401, detail="bad or missing X-API-Token")
+        return
+    if not _is_loopback_bind():
+        raise HTTPException(
+            status_code=403,
+            detail=("refusing a state-changing call: API_HOST is not loopback "
+                    "and no API_TOKEN is set. Set API_TOKEN and send it as "
+                    "X-API-Token, or bind to 127.0.0.1."))
+
+
+def secrets_compare(a: str, b: str) -> bool:
+    import hmac
+    return hmac.compare_digest(a, b)
+
+
 @app.post("/api/learning/trigger")
-async def trigger_learning():
+async def trigger_learning(request: Request):
+    _require_write_auth(request)
     def _run_learning():
         from core.adaptive_learner import get_learner
         changes = get_learner().maybe_update(force=True)
@@ -1616,7 +1654,8 @@ async def trigger_learning():
 
 
 @app.post("/api/learning/reset")
-async def reset_learning():
+async def reset_learning(request: Request):
+    _require_write_auth(request)
     try:
         from core.adaptive_learner import get_learner
         get_learner().reset_all()
@@ -1699,7 +1738,7 @@ async def get_analytics(days: int = 90):
 
 
 @app.post("/api/feedback")
-async def submit_feedback(body: dict):
+async def submit_feedback(request: Request, body: dict):
     """Operator feedback: blacklist pattern, adjust param, add note.
 
     Body examples:
@@ -1707,6 +1746,7 @@ async def submit_feedback(body: dict):
       {"action": "adjust_param", "param": "min_votes", "value": 4}
       {"action": "note", "text": "RELIANCE showing false breakouts today"}
     """
+    _require_write_auth(request)
     def _process():
         from core.agentic_rag import get_agentic_rag
         return get_agentic_rag().process_feedback(body)
@@ -1742,7 +1782,8 @@ def _invalidate_probe() -> None:
 
 
 @app.post("/api/config/token")
-async def save_token(body: dict):
+async def save_token(request: Request, body: dict):
+    _require_write_auth(request)
     token = (body.get("token") or "").strip()
     if not token:
         return {"error": "Token is empty"}
@@ -1759,7 +1800,8 @@ async def save_token(body: dict):
 
 
 @app.post("/api/config/client-id")
-async def save_client_id(body: dict):
+async def save_client_id(request: Request, body: dict):
+    _require_write_auth(request)
     cid = (body.get("client_id") or "").strip()
     if not cid:
         return {"error": "Client ID is empty"}
@@ -1773,7 +1815,8 @@ async def save_client_id(body: dict):
 
 
 @app.post("/api/config/data-key")
-async def save_data_key(body: dict):
+async def save_data_key(request: Request, body: dict):
+    _require_write_auth(request)
     key = (body.get("api_key") or "").strip()
     if not key:
         return {"error": "API key is empty"}

@@ -1,4 +1,5 @@
 import logging
+import os
 import pandas as pd
 import numpy as np
 import time
@@ -509,7 +510,36 @@ class ExecutionEngine:
         if risk_per_lot <= 0:
             return lot_size
         lots = int(risk_budget // risk_per_lot)
-        return max(1, lots) * lot_size
+        if lots >= 1:
+            return lots * lot_size
+
+        # ONE LOT IS TOO BIG. `max(1, lots)` used to take the trade anyway, so
+        # whenever a single lot risked more than the per-trade budget the cap
+        # was silently breached - measured up to 6.7x (KOTAKBANK, lot 2000, Rs
+        # 20 stop: Rs 40,000 of risk against a Rs 6,000 budget). A risk limit
+        # that yields whenever it binds is not a limit.
+        #
+        # Refuse instead, and say so. The breach is recorded on
+        # last_size_refusal so the reason is visible rather than a mystery
+        # empty book. ALLOW_MIN_LOT_BREACH=1 restores the old behaviour for
+        # anyone who would rather take the trade than skip the name.
+        breach = risk_per_lot / risk_budget if risk_budget > 0 else float("inf")
+        self.last_size_refusal = {
+            "symbol": symbol, "lot_size": lot_size,
+            "risk_per_lot": round(risk_per_lot, 2),
+            "risk_budget": round(risk_budget, 2),
+            "breach_multiple": round(breach, 2),
+            "note": (f"one lot risks {breach:.1f}x the per-trade budget - "
+                     f"refused (set ALLOW_MIN_LOT_BREACH=1 to override)"),
+        }
+        if os.environ.get("ALLOW_MIN_LOT_BREACH") == "1":
+            log.warning("[EXEC] %s: 1-lot risk is %.1fx the budget - taking it "
+                        "anyway (ALLOW_MIN_LOT_BREACH=1)", symbol, breach)
+            return lot_size
+        log.warning("[EXEC] %s: refusing - one lot risks %.1fx the per-trade "
+                    "budget (Rs %.0f vs Rs %.0f)", symbol, breach,
+                    risk_per_lot, risk_budget)
+        return 0
 
     def _calculate_option_quantity(self, capital: float, premium: float,
                                     symbol: str = '') -> int:

@@ -113,8 +113,26 @@ def trial_count() -> int:
     return sum(1 for r in _load() if r.get("type") == "register")
 
 
-def status() -> List[Dict]:
-    """One row per hypothesis with latest verdict (None = still open)."""
+# Smoke-test registrations that should never appear beside real research. The
+# log is append-only by design - a registration is never edited or deleted - so
+# these are filtered at READ time rather than removed from the file.
+_SCRATCH_THESES = ("test thesis",)
+
+
+def _is_scratch(thesis: str) -> bool:
+    t = str(thesis or "").strip().lower()
+    return any(t.startswith(m) for m in _SCRATCH_THESES)
+
+
+def status(include_scratch: bool = False) -> List[Dict]:
+    """One row per hypothesis with latest verdict (None = still open).
+
+    Scratch registrations ("test thesis xyz") are hidden unless asked for: they
+    were rendering in the Verdict table next to real hunts, which makes the
+    registry look careless in exactly the surface meant to enforce care.
+    trial_count() still counts them - the multiple-testing bar must not fall
+    because a row was hidden from a table.
+    """
     _ensure_seeded()
     regs: Dict[str, Dict] = {}
     for r in _load():
@@ -123,7 +141,10 @@ def status() -> List[Dict]:
                              "thesis": r["thesis"], "verdict": None}
         elif r.get("type") == "close" and r.get("id") in regs:
             regs[r["id"]]["verdict"] = r.get("verdict")
-    return list(regs.values())
+    rows = list(regs.values())
+    if include_scratch:
+        return rows
+    return [r for r in rows if not _is_scratch(r.get("thesis"))]
 
 
 def main(argv: List[str]) -> int:

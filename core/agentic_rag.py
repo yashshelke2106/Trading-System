@@ -64,6 +64,18 @@ def _get_embedder():
 # ── Data loading helpers ────────────────────────────────────────────────────
 
 def _load_trades_df() -> pd.DataFrame:
+    """Journal first. logs/trades.csv is pinned to a legacy header, so the
+    writer's premium / option / SL / target fields are dropped on every append
+    - indexing it fed the RAG a strictly worse copy of the same trades, with
+    blank stop_loss/target and rupee P&L written at 1 share for any symbol
+    missing from the stale lot map."""
+    try:
+        from core.dashboard_data import _journal_as_trades_frame
+        jdf = _journal_as_trades_frame()
+        if not jdf.empty:
+            return jdf
+    except Exception:
+        pass
     if not os.path.exists(TRADES_CSV):
         return pd.DataFrame()
     try:

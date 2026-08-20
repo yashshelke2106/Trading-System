@@ -192,3 +192,143 @@ def test_the_quarantined_ml_model_is_not_loadable():
     assert not os.path.exists(live), (
         "a live ml_filter_model.pkl re-arms a gate measured to be actively "
         "harmful - keep it renamed, or set DISABLE_G10=1 in the launcher")
+
+
+# ── 4. the ML gate cannot be re-armed by retraining ──────────────────────────
+
+def test_ml_filter_refuses_to_load_by_default(monkeypatch, tmp_path):
+    """The quarantine used to rest on a FILENAME: retraining writes a fresh
+    logs/ml_filter_model.pkl and silently re-arms a gate measured to pick the
+    worst trades. The load path now refuses unless explicitly enabled."""
+    import importlib
+    monkeypatch.delenv("ENABLE_ML_FILTER", raising=False)
+    import core.ml_filter as mf
+    importlib.reload(mf)
+    assert mf.ML_FILTER_ENABLED is False
+    # even with a model file sitting right there
+    monkeypatch.setattr(mf, "MODEL_PATH", tmp_path / "ml_filter_model.pkl")
+    (tmp_path / "ml_filter_model.pkl").write_bytes(b"not-a-real-pickle")
+    assert mf._load_model() is None, "a present model must not re-arm the gate"
+
+
+def test_ml_filter_stays_pass_through_when_disabled(monkeypatch):
+    """Inert must mean inert: the gate passes candidates, it does not kill them."""
+    import importlib
+    monkeypatch.delenv("ENABLE_ML_FILTER", raising=False)
+    import core.ml_filter as mf
+    importlib.reload(mf)
+    ok, info = mf.check_ml_filter({"rsi": 50, "score": 70, "grade": "A",
+                                   "direction": "long", "patterns": []})
+    assert ok is True
+    assert info.get("ml_prob") is None
+
+
+# ── 5. one lot must not silently breach the risk cap ─────────────────────────
+
+def test_a_single_lot_over_budget_is_refused(monkeypatch):
+    """max(1, lots) took the trade anyway whenever one lot exceeded the
+    per-trade budget - measured at 6.7x (KOTAKBANK, lot 2000, Rs 20 stop:
+    Rs 40,000 of risk against a Rs 6,000 budget)."""
+    monkeypatch.delenv("ALLOW_MIN_LOT_BREACH", raising=False)
+    from core.execution import ExecutionEngine
+    e = ExecutionEngine()
+    qty = e._calculate_futures_quantity(500_000, 390.0, 370.0, "KOTAKBANK")
+    assert qty == 0, "a risk limit that yields whenever it binds is not a limit"
+    r = e.last_size_refusal
+    assert r and r["breach_multiple"] > 1
+    assert "refused" in r["note"]
+
+
+def test_an_affordable_position_still_sizes():
+    from core.execution import ExecutionEngine
+    e = ExecutionEngine()
+    assert e._calculate_futures_quantity(5_000_000, 390.0, 388.0, "KOTAKBANK") > 0
+
+
+def test_the_breach_override_still_exists(monkeypatch):
+    monkeypatch.setenv("ALLOW_MIN_LOT_BREACH", "1")
+    from core.execution import ExecutionEngine
+    e = ExecutionEngine()
+    assert e._calculate_futures_quantity(500_000, 390.0, 370.0, "KOTAKBANK") > 0
+
+
+# ── 6. the trade frame must come from the journal ────────────────────────────
+
+def test_trades_frame_carries_sl_and_target():
+    """trades.csv is pinned to a legacy header, so stop_loss/target are blank in
+    every row and the option columns never arrive. Anything reading it reads a
+    strictly worse copy of the journal."""
+    from core.dashboard_data import load_trades_frame
+    df = load_trades_frame()
+    if df.empty:
+        pytest.skip("no resolved trades in this environment")
+    assert "stop_loss" in df.columns and "target" in df.columns
+    assert df["stop_loss"].notna().any(), "stop_loss blank => still reading the CSV"
+    assert (df["quantity"] > 1).any(), "quantity should be lot-scaled, not 1"
+
+
+# ── 7. mutating endpoints are guarded off-loopback ───────────────────────────
+
+def _client():
+    from fastapi.testclient import TestClient
+    import api_server as A
+    return TestClient(A.app)
+
+
+def test_loopback_writes_are_unchanged(monkeypatch):
+    """The fix must not break the normal desktop flow."""
+    monkeypatch.delenv("API_HOST", raising=False)
+    monkeypatch.delenv("API_TOKEN", raising=False)
+    assert _client().post("/api/learning/reset", json={}).status_code == 200
+
+
+def test_a_widened_bind_without_a_token_is_refused(monkeypatch):
+    """API_HOST is a one-variable mistake away from exposing credential writes
+    to the network."""
+    monkeypatch.setenv("API_HOST", "0.0.0.0")
+    monkeypatch.delenv("API_TOKEN", raising=False)
+    r = _client().post("/api/config/token", json={"token": "eyJfake"})
+    assert r.status_code == 403
+
+
+def test_a_configured_token_is_enforced(monkeypatch):
+    monkeypatch.setenv("API_TOKEN", "sekret")
+    monkeypatch.delenv("API_HOST", raising=False)
+    c = _client()
+    assert c.post("/api/config/token", json={"token": "eyJfake"}).status_code == 401
+    assert c.post("/api/config/token", json={"token": "eyJfake"},
+                  headers={"X-API-Token": "sekret"}).status_code == 200
+
+
+# ── 8. registry hygiene ──────────────────────────────────────────────────────
+
+def test_scratch_registrations_are_hidden_but_still_counted():
+    """Hiding a row from a table must not lower the multiple-testing bar."""
+    from core.hypothesis_registry import status, trial_count
+    shown = status()
+    assert not any("test thesis" in str(h["thesis"]).lower() for h in shown)
+    assert len(status(include_scratch=True)) >= len(shown)
+    assert trial_count() >= len(status(include_scratch=True))
+
+
+# ── 9. the backfill must not look past the exit ──────────────────────────────
+
+def test_backfill_does_not_see_prices_after_the_exit():
+    """The replay ran to option_expiry or MAX_HOLD, so a position that really
+    closed in 20 hours got its spot label from up to ten days of subsequent
+    action it was never exposed to."""
+    import pandas as pd
+    from backfill_spot_outcomes import replay
+
+    idx = pd.to_datetime(["2026-08-04", "2026-08-05", "2026-08-06", "2026-08-12"])
+    bars = pd.DataFrame(
+        {"open": [100., 101., 102., 150.], "high": [101., 104., 103., 160.],
+         "low": [99., 97., 101.5, 148.], "close": [100.5, 102., 102.5, 155.]},
+        index=idx)
+    row = {"entry_price": 100., "sl_price": 90., "target_price": 130.,
+           "direction": "long", "ts": "2026-08-03T16:30:00",
+           "exit_ts": "2026-08-06T15:30:00"}
+
+    label, _, _, _, _, mfe, _ = replay(row, bars)
+    assert label == "TIME_EXIT", "the 08-12 spike was after the exit"
+    assert mfe < 10, f"mfe {mfe} includes bars past the exit"

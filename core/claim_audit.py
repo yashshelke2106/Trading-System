@@ -80,10 +80,25 @@ NEGATION_NEAR = [
 # A PRECONDITION is not an assertion. "Set True only until a genuine edge is
 # validated" states what would have to become true; flagging it would train the
 # reader to ignore the audit, which is how checklists die.
-CONDITIONAL_NEAR = [
+#
+# DIRECTION MATTERS, and getting it wrong is not hypothetical: adding a bare
+# "hunt" here once silenced "the one lead that survived the hunt" - the exact
+# sentence this module was built to catch. A qualifier that DISCOUNTS a claim
+# comes BEFORE it ("hunt a real edge", "after a real edge clears"); the same
+# word after the claim is usually its object ("survived the hunt"). So these
+# are matched only in the text preceding the match.
+CONDITIONAL_BEFORE = [
     r"\buntil\b", r"\bbefore\b", r"\bunless\b", r"\bonce\b",
     r"\brequires?\b", r"\bneed(?:s|ed)?\b", r"\bwould\b", r"\bshould\b",
     r"\bassum\w*\b", r"\bexample\b", r"\be\.g\.",
+    r"\bafter\b", r"\bhunt\w*\b", r"\bturns?\b", r"\bhow to\b",
+    r"\bpre-committed\b",
+]
+
+# Definitional verbs that follow the subject: "a real edge HOLDS OOS" defines
+# what an edge is, it does not claim to have one.
+DEFINITIONAL_AFTER = [
+    r"\bholds\b", r"\bmeans\b", r"\bdefin\w*\b", r"\bclears?\b",
 ]
 
 HID_RE = re.compile(r"\bH-\d{3}\b")
@@ -131,10 +146,23 @@ def _iter_py(root: str):
 
 
 def _discounted(line: str, span: "tuple[int,int]") -> bool:
-    """Is the claim denied, or stated as a precondition rather than a fact?"""
+    """Is the claim denied, or stated as a precondition rather than a fact?
+
+    A denial can sit on either side ("is not real", "real edge? no"), so
+    NEGATION is matched in both directions. Preconditions and goals only
+    discount when they PRECEDE the claim, and definitional verbs only when they
+    FOLLOW it - see the note on CONDITIONAL_BEFORE for why that direction is
+    load-bearing.
+    """
     lo = max(0, span[0] - 90)
-    ctx = line[lo:span[1] + 90].lower()
-    return any(re.search(p, ctx) for p in NEGATION_NEAR + CONDITIONAL_NEAR)
+    before = line[lo:span[0]].lower()
+    after = line[span[1]:span[1] + 90].lower()
+    both = (before + " " + line[span[0]:span[1]] + " " + after).lower()
+    if any(re.search(p, both) for p in NEGATION_NEAR):
+        return True
+    if any(re.search(p, before) for p in CONDITIONAL_BEFORE):
+        return True
+    return any(re.search(p, after) for p in DEFINITIONAL_AFTER)
 
 
 def audit(root: Optional[str] = None) -> List[Finding]:

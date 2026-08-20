@@ -201,7 +201,9 @@ def main():
         print(f"  worst period ({full['worst']:+.1f}) is ~{tail_ratio:.0f}x the mean.")
     elif edge:
         print(f"  VERDICT: VRP positive both halves BUT the tail is brutal — worst")
-        print(f"  period is ~{tail_ratio:.0f}x the mean premium. The edge is real on")
+        # H-014 CONDITIONAL-PASS / H-016 REJECTED: positive on average, never
+        # closed as a PASS. Wording kept honest about which of those it is.
+        print(f"  period is ~{tail_ratio:.0f}x the mean premium. Positive on")
         print("  average; surviving the crash is the whole game. Defined-risk + tiny")
         print("  size only, and accept that one bad event can erase a year.")
     else:

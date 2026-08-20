@@ -22,7 +22,10 @@ WHAT IT WRITES:
 
 DECISION RULE after 2-3 settled cycles:
   premium_ratio = market_ltp / model_prem_same_expiry, averaged.
-  ~>= 0.8  -> model income roughly honest -> sleeve is deployable-grade.
+  ~>= 0.8  -> model income roughly honest -> the MODEL is usable.
+              (A calibration threshold, not a verdict on the sleeve: no
+               hypothesis has been registered or closed for covered calls,
+               so nothing here has cleared the statistician gate.)
   ~<  0.6  -> skew eats the edge -> stick to plain index holding.
 
 Run daily (or whenever):  python covered_call_tracker.py

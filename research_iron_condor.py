@@ -1,5 +1,12 @@
 """
-Iron-condor backtest — the FINAL gate on the only real edge (the VRP).
+Iron-condor backtest — the gate on the volatility risk premium.
+
+REGISTRY: H-014 CONDITIONAL-PASS (defined-risk short-vol sleeve) and H-015 OPEN
+(is 14d the right horizon, not the assumed 30d). "The only real edge" was a
+claim this file made about itself while no hypothesis had closed as a PASS;
+H-014 is conditional and H-015 is still open, so treat what follows as a
+candidate under test rather than a validated result. Related: H-016 REJECTED
+(no state where realized exceeds implied).
 
 research_vrp.py proved the volatility risk premium is real and holds OOS
 (implied > realized 77% of the time) — BUT with a catastrophic -57 vol-pt tail

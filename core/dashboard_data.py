@@ -151,14 +151,93 @@ def _normalize_outcome(row: pd.Series) -> str:
     return exit_reason or status
 
 
+def _journal_as_trades_frame() -> pd.DataFrame:
+    """The signal journal, wearing the legacy trades.csv column names.
+
+    logs/trades.csv is a lossy mirror: it is pinned to a legacy header, so
+    _write_paper_trade's premium / option / SL / target fields are dropped by
+    extrasaction="ignore" on every append. `stop_loss` and `target` are blank in
+    every row, and the option columns never arrive. Anything reading it is
+    reading a strictly worse copy of the journal.
+
+    Emitting the same column names keeps every existing consumer (rag_engine,
+    streamlit_app, today_trades_frame) working unchanged while the data
+    underneath becomes complete. Rupee P&L is recomputed at the LIVE lot rather
+    than trusted from the file, for the same reason as everywhere else: the
+    stored figure was written when a missing symbol silently sized at 1 share.
+    """
+    rows = []
+    try:
+        with open(JOURNAL_FILE, encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if line:
+                    try:
+                        rows.append(json.loads(line))
+                    except Exception:
+                        continue
+    except Exception:
+        return pd.DataFrame()
+
+    try:
+        from core.futures_leg import lot_size_for
+    except Exception:                                   # pragma: no cover
+        def lot_size_for(_s):
+            return 1
+
+    out = []
+    for r in rows:
+        if not r.get("outcome"):
+            continue
+        sym = str(r.get("symbol") or "").upper()
+        lot = max(1, int(lot_size_for(sym)))
+        ep, xp = r.get("entry_prem"), r.get("exit_prem")
+        pnl = None
+        if ep is not None and xp is not None and lot > 1:
+            pnl = (float(xp) - float(ep)) * lot
+        elif r.get("pnl_rupees") is not None and lot > 1:
+            pnl = float(r["pnl_rupees"])
+        oc = str(r.get("outcome"))
+        out.append({
+            "trade_id": r.get("signal_id"),
+            "timestamp": r.get("exit_ts") or r.get("ts"),
+            "symbol": sym,
+            "direction": str(r.get("direction") or "").upper(),
+            "entry_price": r.get("entry_price"),
+            "exit_price": r.get("exit_price"),
+            "stop_loss": r.get("sl_price"),
+            "target": r.get("target_price"),
+            "quantity": lot,
+            "pnl": pnl,
+            "pnl_percent": r.get("pnl_pct"),
+            "spot_pnl_pct": r.get("spot_pnl_pct"),
+            "status": {"TARGET_HIT": "WIN", "SL_HIT": "LOSS"}.get(oc, "EXPIRED"),
+            "exit_reason": oc,
+            "grade": r.get("grade"),
+            "option_type": r.get("option_type"),
+            "strike_price": r.get("option_strike"),
+            "premium": ep,
+            "rank": r.get("rank"),
+            "total_score": r.get("score"),
+            "market_bias": r.get("market_bias"),
+            "session": r.get("session"),
+            "ai_probability": r.get("ai_prob"),
+        })
+    return pd.DataFrame(out)
+
+
 def load_trades_frame() -> pd.DataFrame:
     def loader() -> pd.DataFrame:
-        if not os.path.exists(TRADES_CSV):
-            return pd.DataFrame()
-        try:
-            df = pd.read_csv(TRADES_CSV)
-        except Exception:
-            return pd.DataFrame()
+        df = _journal_as_trades_frame()
+        if df.empty:
+            # Legacy fallback only - see _journal_as_trades_frame for why the
+            # CSV can never be complete.
+            if not os.path.exists(TRADES_CSV):
+                return pd.DataFrame()
+            try:
+                df = pd.read_csv(TRADES_CSV)
+            except Exception:
+                return pd.DataFrame()
         if df.empty:
             return df
 

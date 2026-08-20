@@ -358,10 +358,21 @@ export default function VerdictPage() {
             INTRADAY DATA BEING LOST — capture scheduler is not keeping up (60-day window).
           </p>
         )}
-        <p style={{ color: "var(--txd)", fontSize: ".8em" }}>
-          tape ({ms?.universe ?? "top100"}): up {tally.up ?? 0} · down {tally.down ?? 0} ·
-          sideways {tally.sideways ?? 0} — labels describe the past, not the future.
-        </p>
+        {/* A failed fetch used to render "up 0 · down 0 · sideways 0", which
+            reads as a perfectly flat market rather than as no answer. This
+            endpoint exceeds its 12s deadline under Dhan throttling, so the
+            distinction is not hypothetical. */}
+        {(!ms || ms.error || !Object.keys(tally).length) ? (
+          <p style={{ color: AMBER, fontSize: ".8em" }}>
+            tape unavailable — {ms?.error ? `market-state failed: ${ms.error}` :
+            "no response from /api/market-state"}. Not the same as a flat tape.
+          </p>
+        ) : (
+          <p style={{ color: "var(--txd)", fontSize: ".8em" }}>
+            tape ({ms.universe ?? "top100"}): up {tally.up ?? 0} · down {tally.down ?? 0} ·
+            sideways {tally.sideways ?? 0} — labels describe the past, not the future.
+          </p>
+        )}
       </section>
 
       <div style={{

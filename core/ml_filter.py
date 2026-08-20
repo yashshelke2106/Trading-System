@@ -237,8 +237,23 @@ def train_and_save(csv_path: str = "backtest_india_swing_trades.csv",
 _cached_bundle: Optional[Dict] = None
 
 
+# QUARANTINE, 2026-08-06. Measured on the live CSV, this model selects the
+# WORST trades: -3.04%/trade against a -1.20% baseline, accuracy 0.474 against
+# 0.868 for "accept everything". It was taken out of service by RENAMING the
+# artifact - which is not a quarantine, it is a filename. Retraining writes a
+# fresh logs/ml_filter_model.pkl and silently re-arms a gate measured to be
+# actively harmful, and no launcher sets DISABLE_G10 to stop it.
+#
+# So the load path now refuses by default. Set ENABLE_ML_FILTER=1 to opt back
+# in, which is a deliberate act that leaves a trace, rather than a side effect
+# of running the trainer.
+ML_FILTER_ENABLED = os.environ.get("ENABLE_ML_FILTER", "0") == "1"
+
+
 def _load_model() -> Optional[Dict]:
     global _cached_bundle
+    if not ML_FILTER_ENABLED:
+        return None
     if _cached_bundle is not None:
         return _cached_bundle
     if not MODEL_PATH.exists():

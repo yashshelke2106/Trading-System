@@ -45,11 +45,14 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import os
 import sys
 import time
 import traceback
 from datetime import date, datetime, timedelta, timezone
+
+log = logging.getLogger(__name__)
 
 STATE_FILE = os.path.join("logs", "capture_state.json")
 
@@ -94,7 +97,29 @@ def run_intraday(universe: str = "top100", pace: float = 0.4) -> dict:
     out = {"layer": "intraday", "ok": False}
     try:
         from core import intraday_capture as ic
-        symbols = ic._resolve_universe(universe)
+        symbols = list(ic._resolve_universe(universe))
+
+        # REFRESH WHAT YOU ALREADY HOLD. The universe is top100 but the archive
+        # had grown to 151 symbols, so 51 of them were never refreshed and aged
+        # toward the 60-day cliff - past which 5m history is UNRECOVERABLE, not
+        # merely late. Coverage counted them while the refresh did not, so the
+        # health metric reported 151 symbols and a worst-stale that no
+        # successful run could ever move.
+        try:
+            import glob
+            import os as _os
+            held = {_os.path.basename(f).rsplit(".", 1)[0]
+                    for f in glob.glob(_os.path.join("logs", "intraday_5m", "*"))}
+            orphans = sorted(held - set(symbols))
+            if orphans:
+                log.info("[capture] +%d archived symbols outside %s "
+                         "(they age out at 60d if never refreshed)",
+                         len(orphans), universe)
+                symbols += orphans
+                out["orphans_refreshed"] = len(orphans)
+        except Exception as exc:                      # never block the main leg
+            log.warning("[capture] orphan sweep failed: %s", exc)
+
         st = ic.capture(symbols, pace_sec=pace)
         out.update({
             "ok": True,

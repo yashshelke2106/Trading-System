@@ -83,9 +83,17 @@ def replay(row, bars):
     fut = bars[bars.index.map(lambda d: d.date() > edate)]
     if len(fut) == 0:
         return None
-    horizon = _date(row.get("option_expiry"))
+    # Cap the walk-forward at the trade's ACTUAL exit when one is recorded.
+    # Without this the replay ran to option_expiry or MAX_HOLD - so a position
+    # that really closed in 20 hours got its spot label derived from up to ten
+    # days of subsequent price action it was never exposed to. Rows resolved
+    # live and rows backfilled were then answering different questions, and the
+    # backfilled ones were answering a question nobody asked.
+    horizon = _date(row.get("exit_ts")) or _date(row.get("option_expiry"))
     if horizon is not None:
         fut = fut[fut.index.map(lambda d: d.date() <= horizon)]
+        if len(fut) == 0:
+            return None          # exited same session; no daily bar to replay
     else:
         fut = fut.iloc[:MAX_HOLD]
     if len(fut) < 1:
