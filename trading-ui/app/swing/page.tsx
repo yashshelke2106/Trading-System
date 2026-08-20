@@ -217,6 +217,17 @@ export default function SwingPage() {
         <div className="secDot" style={{ background: "#a78bfa" }} />
         <div className="secTitle">Paper trades &amp; P&amp;L · {data?.open.length ?? 0} open / {res.length} resolved</div>
       </div>
+      {/* Name the book and the basis. This block counts SWING equity paper
+          trades at a notional you choose; the Accuracy tab counts the OPTIONS
+          journal in premium rupees; the Verdict tab reports that same options
+          journal in spot %. Three different books answering three different
+          questions — unlabelled, they read as the dashboard contradicting
+          itself, which is exactly how it read before. */}
+      <div style={{ fontSize: ".72em", color: "var(--txd)", marginTop: -8 }}>
+        Swing equity book · net spot return × the ₹/trade notional below. Separate
+        from the options journal on the Accuracy and Verdict tabs — different
+        instrument, different trades, not a second opinion on the same ones.
+      </div>
       {res.length > 0 ? (
         <>
           <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>

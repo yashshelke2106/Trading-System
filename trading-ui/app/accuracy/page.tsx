@@ -8,6 +8,14 @@ function fmt(n: number | null | undefined, dec = 2) {
   return n.toLocaleString("en-IN", { minimumFractionDigits: dec, maximumFractionDigits: dec })
 }
 
+const MIN_PATTERN_N = 5   // below this a pattern is noise, not evidence
+
+/** Rupees with the sign OUTSIDE the symbol: -Rs 5,609, never Rs -5,609. */
+function rupees(n: number | null | undefined, dec = 0) {
+  if (n == null) return "—"
+  return `${n < 0 ? "-" : ""}₹${fmt(Math.abs(n), dec)}`
+}
+
 const TH: React.CSSProperties = {
   background: "var(--c2)", color: "var(--txd)",
   fontSize: ".66em", fontWeight: 700, textTransform: "uppercase",
@@ -22,7 +30,8 @@ const TD: React.CSSProperties = {
 
 interface LearningData {
   param_summary: Array<{ param: string; section: string; default: number; current: number; min: number; max: number }>
-  pattern_stats: Record<string, { wins: number; losses: number; total: number; win_rate: number; avg_pnl: number }>
+  pattern_stats: Record<string, { wins: number; losses: number; total: number; win_rate: number;
+                                  avg_pnl: number; avg_spot_pct: number | null; spot_n: number }>
   regime_stats:  Record<string, { wins: number; losses: number; total: number; win_rate: number }>
   feature_importance: Array<{ feature: string; importance: number; direction: string }>
   recent_changes: Array<{ ts: string; n_trades: number; changes: Record<string, { from: number; to: number; reason: string }> }>
@@ -89,7 +98,20 @@ export default function AccuracyPage() {
         <div className="secTitle">Signal Accuracy · Self-Learning Engine</div>
       </div>
 
-      {/* P&L summary metrics */}
+      {/* P&L summary metrics.
+          Labelled on purpose. This tab counts the OPTIONS journal in premium
+          rupees; the Overview tab counts the SWING paper book; the Verdict tab
+          reports spot %. Three different questions that all used to be called
+          "P&L", which is why the tabs looked like they disagreed. */}
+      {Object.keys(ps).length > 0 && (
+        <div style={{ fontSize: ".72em", color: "var(--txd)", marginBottom: -6 }}>
+          Options journal · premium cash at the resolved contract size
+          {(ps.unresolved_lot ?? 0) > 0 &&
+            ` · ${ps.unresolved_lot} trade(s) excluded (contract size unknown)`}
+          . Signal skill in spot % lives on the Verdict tab; the swing paper book
+          is a separate book on Overview.
+        </div>
+      )}
       {Object.keys(ps).length > 0 && (
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(130px,1fr))", gap: 8 }}>
           {[
@@ -105,7 +127,7 @@ export default function AccuracyPage() {
             <div key={k} style={{ background: "var(--c1)", border: "1px solid var(--bd)", borderRadius: 8, padding: "10px 14px" }}>
               <div style={{ fontSize: ".58em", fontWeight: 600, textTransform: "uppercase", letterSpacing: ".1em", color: "var(--txs)", marginBottom: 3 }}>{lbl}</div>
               <div style={{ fontSize: "1.3em", fontWeight: 700, color: clr ?? "var(--tx)", fontFamily: "'JetBrains Mono', monospace" }}>
-                {k.endsWith("_rupees") ? `₹${fmt(ps[k], dec)}` : `${fmt(ps[k], dec)}${suffix}`}
+                {k.endsWith("_rupees") ? rupees(ps[k], dec) : `${fmt(ps[k], dec)}${suffix}`}
               </div>
             </div>
           ))}
@@ -187,31 +209,61 @@ export default function AccuracyPage() {
       )}
 
       {activeTab === "patterns" && (
-        <div style={{ overflow: "auto", border: "1px solid var(--bd)", borderRadius: 8, background: "var(--c1)" }}>
-          <table style={{ width: "100%", borderCollapse: "collapse" }}>
-            <thead><tr>
-              {["Pattern","Wins","Losses","Total","Win Rate","Avg P&L"].map(h => <th key={h} style={TH}>{h}</th>)}
-            </tr></thead>
-            <tbody>
-              {!Object.keys(learning?.pattern_stats ?? {}).length && (
-                <tr><td colSpan={6} style={{ ...TD, textAlign: "center", color: "var(--txd)", padding: 20 }}>No pattern data yet</td></tr>
-              )}
-              {Object.entries(learning?.pattern_stats ?? {})
-                .sort(([,a], [,b]) => b.total - a.total)
-                .map(([pattern, s]) => (
-                  <tr key={pattern}>
-                    <td style={{ ...TD, fontWeight: 600 }}>{pattern}</td>
-                    <td style={{ ...TD, color: "#00c896" }}>{s.wins}</td>
-                    <td style={{ ...TD, color: "#ff3d5e" }}>{s.losses}</td>
-                    <td style={TD}>{s.total}</td>
-                    <td style={{ ...TD, fontWeight: 700, color: s.win_rate >= 0.6 ? "#00c896" : s.win_rate < 0.4 ? "#ff3d5e" : "#f59e0b" }}>
-                      {(s.win_rate * 100).toFixed(1)}%
-                    </td>
-                    <td style={{ ...TD, color: pnlClr(s.avg_pnl) }}>₹{fmt(s.avg_pnl, 0)}</td>
-                  </tr>
-                ))}
-            </tbody>
-          </table>
+        <div>
+          <p style={{ fontSize: ".72em", color: "var(--txd)", margin: "0 0 8px" }}>
+            <strong style={{ color: "var(--tx)" }}>Win rate</strong> and{" "}
+            <strong style={{ color: "var(--tx)" }}>Avg spot</strong>{" "}are the
+            theta/IV-denoised SPOT result — the pattern&rsquo;s own edge, and the
+            label the learner actually trains on.{" "}
+            <strong style={{ color: "var(--tx)" }}>Avg premium</strong> is the
+            cash a long-option position returned; it is negative for nearly every
+            pattern by construction, because the book pays theta whatever the
+            pattern does. Rank on spot, not on premium.
+          </p>
+          <div style={{ overflow: "auto", border: "1px solid var(--bd)", borderRadius: 8, background: "var(--c1)" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <thead><tr>
+                {["Pattern","Wins","Losses","Total","Win Rate (spot)","Avg spot %","Avg premium"]
+                  .map(h => <th key={h} style={TH}>{h}</th>)}
+              </tr></thead>
+              <tbody>
+                {!Object.keys(learning?.pattern_stats ?? {}).length && (
+                  <tr><td colSpan={7} style={{ ...TD, textAlign: "center", color: "var(--txd)", padding: 20 }}>No pattern data yet</td></tr>
+                )}
+                {Object.entries(learning?.pattern_stats ?? {})
+                  // Rank on spot edge, but a 1-trade pattern is noise, not the
+                  // best pattern: anything under MIN_N sinks below the rest.
+                  .sort(([,a], [,b]) => {
+                    const thin = (x: typeof a) => (x.total >= MIN_PATTERN_N ? 0 : 1)
+                    return thin(a) - thin(b)
+                      || (b.avg_spot_pct ?? -99) - (a.avg_spot_pct ?? -99)
+                  })
+                  .map(([pattern, s]) => (
+                    <tr key={pattern} style={s.total < MIN_PATTERN_N ? { opacity: .55 } : undefined}>
+                      <td style={{ ...TD, fontWeight: 600 }}>
+                        {pattern}
+                        {s.total < MIN_PATTERN_N && (
+                          <span style={{ color: "var(--txd)", fontWeight: 400 }} title={`only ${s.total} trade(s)`}>
+                            {" "}· thin
+                          </span>
+                        )}
+                      </td>
+                      <td style={{ ...TD, color: "#00c896" }}>{s.wins}</td>
+                      <td style={{ ...TD, color: "#ff3d5e" }}>{s.losses}</td>
+                      <td style={TD}>{s.total}</td>
+                      <td style={{ ...TD, fontWeight: 700, color: s.win_rate >= 0.6 ? "#00c896" : s.win_rate < 0.4 ? "#ff3d5e" : "#f59e0b" }}>
+                        {(s.win_rate * 100).toFixed(1)}%
+                      </td>
+                      <td style={{ ...TD, fontWeight: 700, color: pnlClr(s.avg_spot_pct ?? 0) }}>
+                        {s.avg_spot_pct == null ? "—"
+                          : `${s.avg_spot_pct >= 0 ? "+" : ""}${s.avg_spot_pct.toFixed(3)}%`}
+                      </td>
+                      <td style={{ ...TD, color: pnlClr(s.avg_pnl) }}>{rupees(s.avg_pnl, 0)}</td>
+                    </tr>
+                  ))}
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
 
