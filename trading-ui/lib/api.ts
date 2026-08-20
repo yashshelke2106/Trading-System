@@ -62,6 +62,7 @@ export const fetchStats         = ()                => apiFetch("/api/stats")
 export const fetchLearningRules = ()                => apiFetch("/api/learning-rules")
 export const fetchIntelligence  = ()                => apiFetch("/api/intelligence")
 export const fetchLearning      = ()                => apiFetch("/api/learning")
+export const fetchPortfolio     = ()                => apiFetch("/api/portfolio")
 
 export const postToken     = (token: string)    => apiPost("/api/config/token",     { token })
 export const postClientId  = (client_id: string) => apiPost("/api/config/client-id", { client_id })

@@ -138,6 +138,34 @@ _PAPER_COLS = [
 ]
 
 
+def _lot_for(symbol: str) -> int:
+    """Contract size for `symbol`, live scrip master first.
+
+    Queries core.scrip_master DIRECTLY rather than going through
+    core.futures_leg: futures_leg imports `config`, which is untracked, so in
+    a git worktree that import raises and every lot silently collapsed to 1 —
+    the same failure this helper exists to prevent. A pure contract-size
+    lookup should not need the trading config to answer.
+
+    Returns 1 only when the lot genuinely cannot be resolved. Callers that
+    aggregate money must treat a 1 as "unscaled", not as "one lot" — see
+    `lot_resolved` on the P&L rows the API serves.
+    """
+    sym = str(symbol or "").upper()
+    try:
+        from core.scrip_master import lot_size as _live_lot
+        live = _live_lot(sym)
+        if live and int(live) > 0:
+            return int(live)
+    except Exception:
+        pass
+    try:
+        import config
+        return max(1, int(getattr(config, "NSE_LOT_SIZES", {}).get(sym, 1)))
+    except Exception:
+        return 1
+
+
 def _write_paper_trade(sig: Dict, outcome: str, exit_price: float, lot_size: int,
                        exit_prem: Optional[float] = None) -> None:
     """Append a paper trade record to trades.csv for the resolved signal."""
@@ -294,9 +322,14 @@ def check_outcomes(lot_sizes: Dict[str, int] = None) -> Tuple[int, int, int]:
     Returns (target_hits, sl_hits, expired).
     """
     from core.signal_journal import get_open_signals, resolve_signal
-    import config
 
-    lot_sizes = lot_sizes or getattr(config, "NSE_LOT_SIZES", {})
+    # Lot resolution goes through _lot_for(): the LIVE scrip master first,
+    # config.NSE_LOT_SIZES only as a fallback. The static map is stale (81 F&O
+    # symbols missing), and the old `.get(sym, 1)` silently sized those at ONE
+    # share — so a 2,250-share NTPC loss and a 1-share SHREECEM loss landed in
+    # the same rupee column and the journal total read 5x too favourable.
+    # An explicit override still wins (tests pass one in).
+    lot_sizes = lot_sizes or {}
     open_sigs = get_open_signals()
     if not open_sigs:
         return 0, 0, 0
@@ -317,7 +350,7 @@ def check_outcomes(lot_sizes: Dict[str, int] = None) -> Tuple[int, int, int]:
         sym = sig["symbol"]
         direction = sig.get("direction", "long").lower()
         ts_str = sig.get("ts", "")
-        base_lot = lot_sizes.get(sym, 1)
+        base_lot = lot_sizes.get(sym) or _lot_for(sym)
         # Grade-based position sizing: size_mult from signal enrichment
         size_mult = float(sig.get("size_mult", 1.0) or 1.0)
         lot = max(1, int(base_lot * size_mult))

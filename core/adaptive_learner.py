@@ -58,10 +58,27 @@ TUNABLE_PARAMS: Dict[str, Tuple[float, float, float, float, str]] = {
     # RSI 30-50 is bearish momentum — shorts should work there.
     "rsi_short_floor":        (30,   20,   40,   2,    "SIGNAL_CONFIG"),
     # Adaptive RR: reduce when SL hits >> target hits (brings target closer).
-    # rr_ratio floor 3.5: below 3.5R x 1% SL = 3.5% stock ≈ 35% premium,
-    # barely covers costs. 4.0R default x 1.5% SL = 6% stock ≈ 50%+ premium.
-    # Ceil 5.0R for genuine trend/top-mover runners.
-    "rr_ratio":               (4.0,  3.5,  5.0,  0.25, "SIGNAL_CONFIG"),
+    #
+    # The floor was 3.5R, justified by OPTION economics: "below 3.5R x 1% SL =
+    # 3.5% stock ~ 35% premium, barely covers costs". That reasoning sized the
+    # target to what a long option needs, not to what the stock does — and it
+    # made this parameter unlearnable. Measured 2026-08-20 on 125 resolved
+    # signals with 5m paths inside the real hold:
+    #
+    #     target 5.0% was touched 0 times; the largest favourable excursion
+    #     was 2.83% and the median was 0.693%.
+    #
+    # So EVERY value in [3.5, 5.0] asks for a move outside the distribution.
+    # The learner lowers rr_ratio when SL hits exceed target hits, would drive
+    # it to the floor, and still never see a target fire: the feasible answer
+    # sat outside the space it was allowed to search. Floor moved to 0.5R,
+    # which covers the reachable range (T=0.43% -> 65% of trades, T=1.0% ->
+    # 33%). Ceiling kept at 5.0 so nothing that worked before is excluded.
+    #
+    # This makes the target REACHABLE. It does not make it profitable — a
+    # 28-cell sweep put actual hit rate below the random-walk null S/(S+T) in
+    # 27 of 28 cells. Reachability is a precondition for learning, not an edge.
+    "rr_ratio":               (4.0,  0.5,  5.0,  0.25, "SIGNAL_CONFIG"),
     "vol_surge_threshold":    (1.5,  1.2,  3.0,  0.1,  "SIGNAL_CONFIG"),
     # Capped at 50: top movers often have moderate strength scores. Multi-TF enforces quality.
     "min_strength":           (35,   25,   50,   5,    "SIGNAL_CONFIG"),
@@ -187,6 +204,32 @@ def _clean_won(r: Dict) -> bool:
         except (ValueError, TypeError):
             pass
     return r.get("outcome") == "TARGET_HIT"
+
+
+def _spot_move_pct(r: Dict) -> Optional[float]:
+    """Theta/IV-denoised spot move for a resolved row, or None.
+
+    Same trust order as core.honest_performance: the recorded spot field
+    first, then a move derived from a real fill. Never the premium pnl_pct.
+    """
+    sp = r.get("spot_pnl_pct")
+    if sp is not None:
+        try:
+            v = float(sp)
+            if abs(v) <= 50.0:
+                return v
+        except (ValueError, TypeError):
+            pass
+    try:
+        e, x = float(r.get("entry_price") or 0), float(r.get("exit_price") or 0)
+        if e > 0 and x > 0 and x != e:
+            d = 1.0 if str(r.get("direction", "long")).lower() == "long" else -1.0
+            v = d * (x / e - 1.0) * 100.0
+            if abs(v) <= 50.0:
+                return v
+    except (ValueError, TypeError):
+        pass
+    return None
 
 
 def _grade_weight(r: Dict) -> float:
@@ -364,19 +407,29 @@ class AdaptiveLearner:
             win_w  += tw * won
         return win_w / total_w if total_w > 0 else 0.0
 
+    def _decided_clean(self) -> List[Dict]:
+        """Resolved rows tagged with the SAME clean label the trainer uses.
+
+        `_won_clean` was only ever attached inside maybe_update(), so the two
+        dashboard helpers below fell through to `outcome == "TARGET_HIT"` —
+        the OPTION result. That made the Pattern Win Rates tab report the
+        premium hit rate (~16%) while the learner it claims to visualise was
+        training on the spot label (~42%), and every pattern read as a loser.
+        Tag here so the tab and the trainer cannot disagree.
+        """
+        decided = [r for r in _resolved_scoped(90)
+                   if r.get("outcome") in ("TARGET_HIT", "SL_HIT")]
+        for r in decided:
+            r["_won_clean"] = _clean_won(r)
+        return decided
+
     def get_pattern_stats(self) -> Dict[str, Dict]:
         """Return per-pattern statistics for dashboard display."""
-        from core.signal_journal import get_resolved_signals
-        resolved = _resolved_scoped(90)
-        decided = [r for r in resolved if r.get("outcome") in ("TARGET_HIT", "SL_HIT")]
-        return self._compute_pattern_stats(decided)
+        return self._compute_pattern_stats(self._decided_clean())
 
     def get_regime_stats(self) -> Dict[str, Dict]:
         """Return per-regime statistics."""
-        from core.signal_journal import get_resolved_signals
-        resolved = _resolved_scoped(90)
-        decided = [r for r in resolved if r.get("outcome") in ("TARGET_HIT", "SL_HIT")]
-        return self._compute_regime_stats(decided)
+        return self._compute_regime_stats(self._decided_clean())
 
     def get_param_summary(self) -> List[Dict]:
         """For dashboard: current vs default for every tunable param."""
@@ -413,18 +466,23 @@ class AdaptiveLearner:
 
     def _compute_pattern_stats(self, decided: List[Dict]) -> Dict[str, Dict]:
         stats: Dict[str, Dict] = defaultdict(lambda: {
-            "wins": 0, "losses": 0, "total_pnl": 0.0, "ema_win_rate": None
+            "wins": 0, "losses": 0, "total_pnl": 0.0, "ema_win_rate": None,
+            "spot_sum": 0.0, "spot_n": 0,
         })
         for sig in decided:
             # Clean signal-skill label (theta/IV-denoised) for pattern stats.
             win = bool(sig.get("_won_clean", sig.get("outcome") == "TARGET_HIT"))
             pnl = float(sig.get("pnl_rupees") or 0)
+            spot = _spot_move_pct(sig)
             for pattern in sig.get("patterns", []):
                 p = pattern.strip().lower()
                 if not p:
                     continue
                 stats[p]["wins" if win else "losses"] += 1
                 stats[p]["total_pnl"] += pnl
+                if spot is not None:
+                    stats[p]["spot_sum"] += spot
+                    stats[p]["spot_n"] += 1
                 # EMA win rate
                 prev = stats[p]["ema_win_rate"]
                 new_obs = 1.0 if win else 0.0
@@ -442,7 +500,13 @@ class AdaptiveLearner:
                 "total":     total,
                 "win_rate":  s["wins"] / total if total else 0.0,
                 "ema_win_rate": s["ema_win_rate"] or 0.5,
+                # Premium rupees. Negative for nearly every pattern by
+                # CONSTRUCTION - a long-option book pays theta whatever the
+                # signal does - so it measures the instrument, not the pattern.
                 "avg_pnl":   s["total_pnl"] / total if total else 0.0,
+                # Spot %: the pattern's own edge, comparable across symbols.
+                "avg_spot_pct": (s["spot_sum"] / s["spot_n"]) if s["spot_n"] else None,
+                "spot_n":    s["spot_n"],
             }
         return result
 

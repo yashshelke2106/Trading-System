@@ -257,43 +257,101 @@ def get_trade_summary() -> Dict:
 
 
 def get_signal_pnl_summary() -> Dict:
-    """₹ P&L summary from signal journal using 1 lot per signal from NSE_LOT_SIZES."""
+    """P&L summary for the Accuracy tab.
+
+    Emits BOTH key spellings on purpose. The tab renders a fixed tile list and
+    hides any tile whose key is missing, so when this returned `win_rate` /
+    `wins` / `losses` while the tab asked for `win_rate_pct` / `target_hit` /
+    `sl_hit` / `closed_signals` / `avg_pnl_rupees`, five of the seven tiles
+    silently vanished — the page looked "fine", just mostly empty, and the one
+    number left (total P&L) had no win rate beside it to give it meaning.
+
+    Rupees are recomputed at the LIVE lot size. The stored pnl_rupees was
+    written with a lookup that fell back to 1 share for any symbol missing
+    from the stale static map, which mixed 1-share and 2,250-share positions
+    in one column and understated the book roughly 5x.
+    """
     df = load_signal_journal_frame()
     decided_raw = df[df["outcome"].isin(["WIN", "LOSS"])] if not df.empty else df
-    # Quality filter — full entry/exit/SL/target details required for P&L counting
+    # Quality filter — a settled trade needs real entry and exit prices. SL and
+    # target are ENTRY-PLAN fields; demanding them to report a REALISED P&L is
+    # what disqualified every row on the P&L tab.
     decided = decided_raw.copy() if not decided_raw.empty else decided_raw
-    for col in ("entry_price", "exit_price", "sl_price", "target_price"):
+    for col in ("entry_price", "exit_price"):
         if col in decided.columns:
             decided = decided[pd.to_numeric(decided[col], errors="coerce") > 0]
-    if "pnl_pct" in decided.columns:
-        decided = decided[pd.to_numeric(decided["pnl_pct"], errors="coerce").notna()]
+
+    empty = {
+        "total_pnl_rupees": 0.0, "total_signals": 0, "closed_signals": 0,
+        "wins": 0, "losses": 0, "target_hit": 0, "sl_hit": 0,
+        "win_rate": 0.0, "win_rate_pct": 0.0,
+        "avg_pnl_rupees": 0.0, "avg_win_rupees": 0.0, "avg_loss_rupees": 0.0,
+        "profit_factor": 0.0, "unresolved_lot": 0,
+        "basis": "premium cash, lot-scaled",
+    }
     if decided.empty:
-        return {
-            "total_pnl_rupees": 0.0,
-            "total_signals": 0,
-            "wins": 0,
-            "losses": 0,
-            "win_rate": 0.0,
-            "avg_win_rupees": 0.0,
-            "avg_loss_rupees": 0.0,
-            "profit_factor": 0.0,
-        }
-    wins   = decided[decided["outcome"] == "WIN"]
-    losses = decided[decided["outcome"] == "LOSS"]
-    total_pnl   = float(decided["pnl_rupees"].sum())
-    avg_win     = float(wins["pnl_rupees"].mean())   if len(wins)   else 0.0
-    avg_loss    = float(losses["pnl_rupees"].mean()) if len(losses) else 0.0
-    pf          = abs(avg_win / avg_loss) if avg_loss else 0.0
-    win_rate    = len(wins) / len(decided) * 100 if len(decided) else 0.0
+        return empty
+
+    try:
+        from core.futures_leg import lot_size_for
+    except Exception:                                    # pragma: no cover
+        def lot_size_for(_sym):                          # type: ignore
+            return 1
+
+    rupees, unresolved = [], 0
+    for _, row in decided.iterrows():
+        lot = 1
+        try:
+            lot = max(1, int(lot_size_for(str(row.get("symbol", "")))))
+        except Exception:
+            lot = 1
+        ep, xp = row.get("entry_prem"), row.get("exit_prem")
+        if lot <= 1:
+            unresolved += 1
+            rupees.append(None)
+            continue
+        try:
+            if pd.notna(ep) and pd.notna(xp):
+                rupees.append((float(xp) - float(ep)) * lot)
+            else:
+                rupees.append(float(row.get("pnl_rupees") or 0.0))
+        except (ValueError, TypeError):
+            rupees.append(None)
+
+    decided = decided.assign(_pnl_lot=rupees)
+    priced = decided[decided["_pnl_lot"].notna()]
+    if priced.empty:
+        out = dict(empty)
+        out.update({"total_signals": int(len(decided)),
+                    "unresolved_lot": unresolved})
+        return out
+
+    wins   = priced[priced["outcome"] == "WIN"]
+    losses = priced[priced["outcome"] == "LOSS"]
+    total_pnl = float(priced["_pnl_lot"].sum())
+    avg_win   = float(wins["_pnl_lot"].mean())   if len(wins)   else 0.0
+    avg_loss  = float(losses["_pnl_lot"].mean()) if len(losses) else 0.0
+    gross_p   = float(wins["_pnl_lot"].sum())    if len(wins)   else 0.0
+    gross_l   = -float(losses["_pnl_lot"].sum()) if len(losses) else 0.0
+    pf        = (gross_p / gross_l) if gross_l > 0 else 0.0
+    win_rate  = len(wins) / len(priced) * 100 if len(priced) else 0.0
+
     return {
         "total_pnl_rupees": round(total_pnl, 2),
         "total_signals":    int(len(decided)),
+        "closed_signals":   int(len(priced)),
         "wins":             int(len(wins)),
         "losses":           int(len(losses)),
+        "target_hit":       int(len(wins)),
+        "sl_hit":           int(len(losses)),
         "win_rate":         round(win_rate, 1),
+        "win_rate_pct":     round(win_rate, 1),
+        "avg_pnl_rupees":   round(total_pnl / len(priced), 2),
         "avg_win_rupees":   round(avg_win, 2),
         "avg_loss_rupees":  round(avg_loss, 2),
         "profit_factor":    round(pf, 2),
+        "unresolved_lot":   unresolved,
+        "basis":            "premium cash, lot-scaled",
     }
 
 

@@ -57,27 +57,60 @@ export interface JournalRecord {
   prem_source?: string
 }
 
+// A settled row from the signal journal — the source of record. Numbers are
+// numbers here, not strings: this used to mirror logs/trades.csv, whose CSV
+// reader made everything a string and whose legacy header silently dropped
+// the premium/option fields on write.
 export interface Trade {
   trade_id: string
-  timestamp: string
+  timestamp: string          // exit time
+  entry_ts: string
   symbol: string
   direction: string
-  entry_price: string
-  exit_price: string
-  quantity: string
-  pnl: string
-  pnl_percent: string
+  entry_price: number | null
+  exit_price: number | null
+  sl_price: number | null
+  target_price: number | null
+  quantity: number
+  /** false = contract size unknown; the row is shown but excluded from cash totals */
+  lot_resolved: boolean
+  /** premium cash at the resolved lot; null when the lot is unknown */
+  pnl: number | null
+  pnl_percent: number | null
+  /** theta/IV-denoised spot move — the signal's own result */
+  spot_pct: number | null
+  spot_outcome: string | null
   status: "WIN" | "LOSS" | "EXPIRED"
   exit_reason: string
-  grade: string
-  entry_premium: string
-  exit_premium: string
-  option_type: string
-  option_strike: string
+  grade: string | null
+  entry_premium: number | null
+  exit_premium: number | null
+  option_type: string | null
+  option_strike: number | null
+  prem_source: string | null
+}
+
+/** Spot-basis metrics from core.honest_performance — the same gate the
+ *  Verdict tab renders, so the two tabs cannot disagree. */
+export interface HonestPerf {
+  trustworthy: boolean
+  note: string
+  n_clean: number
+  n_excluded: number
+  win_rate: number | null
+  profit_factor: number | null
+  expectancy_pct: number | null
+  median_pct: number | null
+  total_pct: number | null
+  alarms: string[]
 }
 
 export interface Stats {
   total: number
+  qualified: number
+  skipped_incomplete: number
+  /** rows whose contract size could not be resolved — kept out of the cash total */
+  unresolved_lot: number
   wins: number
   losses: number
   expired: number
@@ -86,6 +119,8 @@ export interface Stats {
   avg_pnl: number
   best_trade: number
   worst_trade: number
+  basis: string
+  honest?: HonestPerf
 }
 
 export interface IndexQuote {

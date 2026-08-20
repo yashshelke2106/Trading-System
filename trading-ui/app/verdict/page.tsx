@@ -8,7 +8,7 @@
 // summary that says which of those are worth opening.
 import { useEffect, useState, useCallback } from "react"
 import {
-  fetchVerdict, fetchCapture, fetchMarketState, fetchStats, fetchLearningRules,
+  fetchVerdict, fetchCapture, fetchMarketState, fetchLearningRules,
 } from "@/lib/api"
 
 function fmt(n: number | null | undefined, dec = 2) {
@@ -78,6 +78,11 @@ interface Perf {
 }
 interface Lane { lane: string; verdict: string; evidence: string; action: string }
 interface Hypothesis { thesis?: string; verdict?: string; error?: string }
+interface ClaimAudit {
+  unverified: number | null
+  files?: { path: string; hits: { line: number; text: string }[]; n: number }[]
+  error?: string
+}
 interface VerdictData {
   journal_perf?: Perf
   hypotheses?: Hypothesis[]
@@ -85,6 +90,7 @@ interface VerdictData {
   swing_decision?: { status: string; date: string; detail: string }
   dhan?: { expired: boolean; since: string; consequence: string }
   lanes?: Lane[]
+  claim_audit?: ClaimAudit
   bottom_line?: string
   error?: string
 }
@@ -127,20 +133,18 @@ export default function VerdictPage() {
   const [v, setV] = useState<VerdictData | null>(null)
   const [cap, setCap] = useState<CaptureData | null>(null)
   const [ms, setMs] = useState<MarketStateData | null>(null)
-  const [stats, setStats] = useState<Record<string, unknown> | null>(null)
   const [rules, setRules] = useState<LearningRules | null>(null)
   const [err, setErr] = useState<string | null>(null)
 
   const load = useCallback(async () => {
     try {
-      const [vd, cd, md, sd, rd] = await Promise.allSettled([
-        fetchVerdict(), fetchCapture(), fetchMarketState(), fetchStats(),
+      const [vd, cd, md, rd] = await Promise.allSettled([
+        fetchVerdict(), fetchCapture(), fetchMarketState(),
         fetchLearningRules(),
       ])
       if (vd.status === "fulfilled") setV(vd.value); else setErr(String(vd.reason))
       if (cd.status === "fulfilled") setCap(cd.value)
       if (md.status === "fulfilled") setMs(md.value)
-      if (sd.status === "fulfilled") setStats(sd.value)
       if (rd.status === "fulfilled") setRules(rd.value)
     } catch (e) {
       setErr(String(e))
@@ -161,7 +165,6 @@ export default function VerdictPage() {
   const ic = cap?.intraday ?? {}
   const stale = ic.worst_stale_days
   const tally = ms?.tally ?? {}
-  const s = (stats?.stats ?? stats ?? {}) as Record<string, number | undefined>
 
   return (
     <main style={{ padding: 16, maxWidth: 1100, margin: "0 auto" }}>
@@ -185,7 +188,6 @@ export default function VerdictPage() {
           <Stat label="expectancy / trade" value={fmt(p.expectancy_pct) + "%"}
                 color={p.expectancy_pct != null && p.expectancy_pct > 0 ? GREEN : RED} />
           <Stat label="clean trades" value={String(p.n_clean ?? "—")} />
-          {s.total_trades != null && <Stat label="paper trades" value={String(s.total_trades)} />}
         </div>
         <table style={{ width: "100%", borderCollapse: "collapse" }}>
           <thead><tr>
@@ -225,6 +227,47 @@ export default function VerdictPage() {
           New ideas enter here BEFORE code. Re-proposing a rejected hunt with new
           parameters is the failure mode this table exists to stop.
         </p>
+      </section>
+
+      <section style={CARD}>
+        <div style={H2}>Unverified claims — code that asserts an edge nothing checked</div>
+        {v.claim_audit?.error ? (
+          <p style={{ color: AMBER, fontSize: ".8em" }}>audit unavailable: {v.claim_audit.error}</p>
+        ) : (v.claim_audit?.unverified ?? 0) === 0 ? (
+          <p style={{ color: GREEN, fontSize: ".8em" }}>
+            Every edge claim in the tree points at a closed hypothesis.
+          </p>
+        ) : (
+          <>
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <thead><tr>
+                <th style={TH}>File</th><th style={TH}>Claim</th>
+              </tr></thead>
+              <tbody>
+                {(v.claim_audit?.files ?? []).map(f => (
+                  <tr key={f.path}>
+                    <td style={{ ...TD, whiteSpace: "nowrap", color: AMBER }}>
+                      {f.path}{f.n > f.hits.length ? ` (+${f.n - f.hits.length})` : ""}
+                    </td>
+                    <td style={{ ...TD, whiteSpace: "normal", fontSize: ".72em" }}>
+                      {f.hits.map(h => (
+                        <div key={h.line} style={{ color: "var(--txd)" }}>
+                          L{h.line}: {h.text}
+                        </div>
+                      ))}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <p style={{ color: "var(--txd)", fontSize: ".78em", marginTop: 10 }}>
+              A finding is a prompt, not a verdict: run the test, or delete the
+              sentence. <code>pairs_program.py</code> called itself &ldquo;the one lead
+              that survived the hunt&rdquo; for weeks while its own re-test sat
+              unrun — the machinery to catch it all existed, nothing made it fire.
+            </p>
+          </>
+        )}
       </section>
 
       <section style={CARD}>

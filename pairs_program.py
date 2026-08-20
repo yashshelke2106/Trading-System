@@ -1,4 +1,18 @@
 """
+
+*** CLOSED 2026-08-20 - H-019 REJECTED. Do not deploy, do not re-propose. ***
+
+    The "one lead that survived" did not survive its own re-test. Under
+    pairs_validate_v2.py (correlation-MATCHED null + monthly futures roll on
+    both legs):
+        Sharpe 0.49 (was 1.26 before roll costs), p = 0.190 vs matched null.
+        One pair, TCS_INFY, carries it; without that pair Sharpe = 0.21.
+        The validated 8-pair book needs ~Rs 21 lakh of futures margin
+        (Rs 1.34 lakh/leg measured) against Rs 10 lakh available, so the
+        diversification that produced the low drawdown is unfundable.
+    The earlier Sharpe 1.26 / p=0.010 came from a WEAK null (random pairs) and
+    no roll cost. Kept in the tree as the worked example of that mistake.
+
 pairs_program.py — a diversified, market-neutral statistical-arbitrage program.
 The honest build of the one lead that survived the hunt (cointegrated pairs).
 

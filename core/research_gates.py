@@ -28,6 +28,11 @@ THE GATES, cheapest first so most ideas die early
                 null? Bonferroni assumes independent tests and ignores that you
                 selected a maximum. A real best cell once sat at the 0th
                 percentile of its own shuffled null.
+  7 FUNDABILITY Can the account HOLD the book that was validated? Pairs passed
+                on shape and died here: the 8-pair portfolio whose
+                diversification produced the low drawdown needs ~Rs 21 lakh of
+                futures margin. Statistics computed on a book you cannot carry
+                describe a strategy you do not have.
 
 USAGE
 -----
@@ -37,6 +42,7 @@ USAGE
     rep.spread_t(spread_series)
     rep.point_in_time(True); rep.corp_actions(True)
     rep.cost_sweep({10: 0.15, 20: 0.02, 30: -0.12})
+    rep.fundability(capital=1_000_000, margin_per_unit=134_118, units_required=16)
     print(rep.verdict())
 
 Gates you genuinely do not need (a single-cell test needs no shuffle) are
@@ -137,6 +143,32 @@ class GateReport:
                          f"real {real_best:+.3f} at {pct:.0f}th pct of null "
                          f"(null best mean {n.mean():+.3f})")
 
+    # 7 ---------------------------------------------------------------
+    def fundability(self, capital: float, margin_per_unit: float,
+                    units_required: int) -> "GateReport":
+        """Can the account actually HOLD the thing that was validated?
+
+        Added after H-019. Cointegrated pairs validated as an 8-pair book whose
+        low drawdown came FROM the diversification; a stock-futures leg costs
+        Rs 1.34 lakh of margin, so Rs 10 lakh holds three legs. The fundable
+        version was never the version that was tested — a distinction no
+        statistical gate can catch, because the statistics were computed on a
+        book the account could not carry.
+
+        Screen this BEFORE spending compute on a backtest.
+        """
+        if margin_per_unit <= 0 or units_required <= 0:
+            return self._add("7 FUNDABILITY", False,
+                             "margin per unit and units required must be > 0")
+        need = margin_per_unit * units_required
+        affordable = int(capital // margin_per_unit)
+        ok = affordable >= units_required
+        return self._add(
+            "7 FUNDABILITY", ok,
+            f"needs {units_required} units x Rs {margin_per_unit:,.0f} "
+            f"= Rs {need:,.0f}; capital Rs {capital:,.0f} holds {affordable}"
+            + ("" if ok else "  <- validated book is not fundable"))
+
     def not_applicable(self, gate: str, why: str) -> "GateReport":
         """Declare a gate N/A explicitly. Silence is not a pass."""
         return self._add(gate, None, why)
@@ -147,7 +179,8 @@ class GateReport:
 
     def missing(self) -> List[str]:
         required = {"1 BASELINE", "2 SPREAD_T", "3 POINT_IN_TIME",
-                    "4 CORP_ACTIONS", "5 COST_SWEEP", "6 SHUFFLE"}
+                    "4 CORP_ACTIONS", "5 COST_SWEEP", "6 SHUFFLE",
+                    "7 FUNDABILITY"}
         seen = {g.name for g in self.gates}
         return sorted(required - seen)
 
@@ -155,7 +188,7 @@ class GateReport:
         return not self.failures() and not self.missing()
 
     def verdict(self) -> str:
-        order = {"1": 1, "2": 2, "3": 3, "4": 4, "5": 5, "6": 6}
+        order = {"1": 1, "2": 2, "3": 3, "4": 4, "5": 5, "6": 6, "7": 7}
         gs = sorted(self.gates, key=lambda g: order.get(g.name[0], 9))
         lines = [f"THESIS: {self.thesis}", "-" * 58]
         lines += [f"  [{g.mark}] {g.name:16s} {g.detail}" for g in gs]
