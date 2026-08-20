@@ -23,7 +23,6 @@ Run:
 from __future__ import annotations
 
 import asyncio
-import csv
 import json
 import os
 import sys
@@ -52,7 +51,6 @@ app.add_middleware(
 
 SIGNALS_FILE = ROOT / "logs" / "signals.json"
 JOURNAL_FILE = ROOT / "logs" / "signal_journal.jsonl"
-TRADES_FILE  = ROOT / "logs" / "trades.csv"
 
 # Sized well above the number of Dhan-dependent endpoints. With 4 workers, a
 # single wedged loader (spike-alerts scanning 161 symbols against a dead Dhan)
@@ -165,92 +163,146 @@ def _read_journal(days: int = 30) -> List[Dict]:
     return records
 
 
-def _read_trades() -> List[Dict]:
-    if not TRADES_FILE.exists():
-        return []
-    trades: List[Dict] = []
+def _lot_for(symbol: str) -> int:
+    """Contract size, live scrip master first. 1 == unresolved, not "one lot"."""
     try:
-        with open(TRADES_FILE, encoding="utf-8", newline="") as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                trades.append(dict(row))
+        from core.signal_tracker import _lot_for as _lf
+        return _lf(symbol)
     except Exception:
-        pass
-    return trades
+        return 1
 
 
-def _has_complete_trade_data(t: Dict) -> bool:
-    """A trade qualifies for P&L ONLY when all 4 price levels are present
-    and the pnl is computed. No stubs, no None, no 0-entry.
+def _journal_trades(days: int = 30) -> List[Dict]:
+    """P&L rows built from the SIGNAL JOURNAL — the source of record.
 
-    Required:
-      entry_price > 0
-      exit_price  > 0
-      sl_price    > 0
-      target_price > 0  (NSE_LOT_SIZES default 0 is fine; this is trade target)
-      pnl_percent  is not None / not nan
+    The P&L tab used to read logs/trades.csv. That file is a lossy mirror:
+    it is pinned to a legacy header, so the writer's premium / option / SL /
+    target fields are dropped by `extrasaction="ignore"` on every append. The
+    result was a tab that showed 118 trades and Rs 0, with every option column
+    blank, while Journal and Verdict — reading the journal — showed real
+    numbers for the SAME trades. One book, one set of numbers: read the
+    journal here too.
+
+    Two bases travel with every row, never mixed:
+      pnl / pnl_percent  premium cash, lot-scaled  (what option buying cost)
+      spot_pct           theta/IV-denoised spot move (what the signal was worth)
+    `lot_resolved` is False when the contract size is unknown; such a row is
+    reported but excluded from the rupee total rather than counted at 1 share.
     """
-    try:
-        ep = float(t.get("entry_price") or 0)
-        xp = float(t.get("exit_price") or 0)
-        sl = float(t.get("sl_price") or 0)
-        tg = float(t.get("target_price") or 0)
-        pn = t.get("pnl_percent")
-        if pn is None or pn == "":
-            return False
-        float(pn)  # raises if nan-as-string
-        return ep > 0 and xp > 0 and sl > 0 and tg > 0
-    except (ValueError, TypeError):
-        return False
+    rows = _read_journal(days)
+    out: List[Dict] = []
+    for r in rows:
+        if not r.get("outcome"):
+            continue
+        sym = str(r.get("symbol") or "").upper()
+        lot = _lot_for(sym)
+        ep, xp = r.get("entry_prem"), r.get("exit_prem")
+
+        # Recompute the rupee P&L at the CORRECT lot rather than trusting the
+        # stored pnl_rupees: historical rows were written when the lot lookup
+        # silently fell back to 1 share for any symbol missing from the stale
+        # static map, which understated the book roughly 5x.
+        pnl = None
+        if ep is not None and xp is not None and lot > 1:
+            pnl = round((float(xp) - float(ep)) * lot, 2)
+        elif r.get("pnl_rupees") is not None and lot > 1:
+            pnl = float(r["pnl_rupees"])
+
+        pnl_pct = None
+        if ep not in (None, 0) and xp is not None:
+            try:
+                pnl_pct = round((float(xp) / float(ep) - 1.0) * 100.0, 2)
+            except (ValueError, TypeError, ZeroDivisionError):
+                pnl_pct = None
+        if pnl_pct is None and r.get("pnl_pct") is not None:
+            pnl_pct = float(r["pnl_pct"])
+
+        outcome = str(r.get("outcome"))
+        out.append({
+            "trade_id":      r.get("signal_id") or f"{sym}_{r.get('ts','')}",
+            "timestamp":     r.get("exit_ts") or r.get("ts") or "",
+            "entry_ts":      r.get("ts") or "",
+            "symbol":        sym,
+            "direction":     str(r.get("direction") or "").upper(),
+            "entry_price":   r.get("entry_price"),
+            "exit_price":    r.get("exit_price"),
+            "sl_price":      r.get("sl_price"),
+            "target_price":  r.get("target_price"),
+            "quantity":      lot,
+            "lot_resolved":  lot > 1,
+            "pnl":           pnl,
+            "pnl_percent":   pnl_pct,
+            "spot_pct":      r.get("spot_pnl_pct"),
+            "spot_outcome":  r.get("spot_outcome"),
+            "status":        {"TARGET_HIT": "WIN", "SL_HIT": "LOSS"}.get(outcome, "EXPIRED"),
+            "exit_reason":   outcome,
+            "grade":         r.get("grade"),
+            "entry_premium": ep,
+            "exit_premium":  xp,
+            "option_type":   r.get("option_type"),
+            "option_strike": r.get("option_strike"),
+            "prem_source":   r.get("prem_source"),
+        })
+    return out
 
 
 def _compute_stats(trades: List[Dict]) -> Dict:
+    """Two bases, both labelled, never blended.
+
+    CASH  premium rupees at the resolved lot. Only rows whose contract size is
+          known contribute; an unknown lot is counted as unscaled, not as 1
+          share, because summing 1-share and 2,250-share rows produces a
+          number that means nothing.
+    SKILL spot %, delegated to core.honest_performance — the same gate the
+          Verdict tab reads, so the two tabs cannot disagree.
+    """
+    empty = {
+        "total": 0, "qualified": 0, "wins": 0, "losses": 0, "expired": 0,
+        "win_rate": 0.0, "total_pnl": 0.0, "avg_pnl": 0.0,
+        "best_trade": 0.0, "worst_trade": 0.0,
+        "skipped_incomplete": 0, "unresolved_lot": 0,
+        "basis": "premium cash (lot-scaled); skill metrics are spot %",
+    }
     if not trades:
-        return {"total": 0, "qualified": 0, "wins": 0, "losses": 0, "expired": 0,
-                "win_rate": 0.0, "total_pnl": 0.0, "avg_pnl": 0.0,
-                "best_trade": 0.0, "worst_trade": 0.0,
-                "skipped_incomplete": 0}
+        return empty
 
-    # FILTER: only trades with complete entry/exit/SL/target data count toward P&L.
-    # Incomplete rows are reported separately for transparency but excluded from WR/PnL.
-    qualified = [t for t in trades if _has_complete_trade_data(t)]
-    skipped = len(trades) - len(qualified)
+    priced = [t for t in trades if t.get("pnl") is not None]
+    unresolved = sum(1 for t in trades if not t.get("lot_resolved"))
 
-    if not qualified:
-        return {"total": len(trades), "qualified": 0, "wins": 0, "losses": 0,
-                "expired": 0, "win_rate": 0.0, "total_pnl": 0.0, "avg_pnl": 0.0,
-                "best_trade": 0.0, "worst_trade": 0.0,
-                "skipped_incomplete": skipped}
+    wins    = [t for t in priced if t.get("status") == "WIN"]
+    losses  = [t for t in priced if t.get("status") == "LOSS"]
+    expired = [t for t in priced if t.get("status") == "EXPIRED"]
+    pnls    = [float(t["pnl"]) for t in priced]
 
-    wins    = [t for t in qualified if t.get("status") == "WIN"]
-    losses  = [t for t in qualified if t.get("status") == "LOSS"]
-    expired = [t for t in qualified if t.get("status") == "EXPIRED"]
-
-    def _pnl(t):
-        try:
-            return float(t.get("pnl", 0))
-        except (ValueError, TypeError):
-            return 0.0
-
-    pnls = [_pnl(t) for t in qualified]
     total_pnl = sum(pnls)
-    decided = len(wins) + len(losses)   # WR denominator excludes EXPIRED
-    return {
+    decided = len(wins) + len(losses)
+    stats = {
         "total":              len(trades),
-        "qualified":          len(qualified),
-        "skipped_incomplete": skipped,
+        "qualified":          len(priced),
+        "skipped_incomplete": len(trades) - len(priced),
+        "unresolved_lot":     unresolved,
         "wins":               len(wins),
         "losses":             len(losses),
         "expired":            len(expired),
         "win_rate":           round(len(wins) / decided * 100, 1) if decided else 0.0,
         "total_pnl":          round(total_pnl, 2),
-        "avg_pnl":            round(total_pnl / len(qualified), 2) if qualified else 0.0,
+        "avg_pnl":            round(total_pnl / len(priced), 2) if priced else 0.0,
         "best_trade":         round(max(pnls), 2) if pnls else 0.0,
         "worst_trade":        round(min(pnls), 2) if pnls else 0.0,
+        "basis":              "premium cash (lot-scaled); skill metrics are spot %",
     }
 
+    # SKILL basis — identical computation to the Verdict tab.
+    try:
+        from core.honest_performance import honest_performance
+        rows = [{"spot_pnl_pct": t.get("spot_pct"), "entry_price": t.get("entry_price"),
+                 "exit_price": t.get("exit_price"), "direction": t.get("direction", "").lower()}
+                for t in trades]
+        stats["honest"] = honest_performance(rows).as_dict()
+    except Exception as e:
+        stats["honest"] = {"trustworthy": False, "note": f"honest_performance error: {e}"}
+    return stats
 
-# ── Dashboard data helpers (lazy import to avoid startup crash) ───────────────
 
 def _get_dashboard_data():
     from core import dashboard_data as dd
@@ -305,16 +357,14 @@ def get_journal(days: int = 30):
 
 @app.get("/api/trades")
 def get_trades(days: int = 30):
-    trades = _read_trades()
-    if days:
-        cutoff = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
-        trades = [t for t in trades if t.get("timestamp", "") >= cutoff]
-    return {"trades": trades, "stats": _compute_stats(trades)}
+    trades = _journal_trades(days)
+    return {"trades": trades, "stats": _compute_stats(trades),
+            "source": "signal_journal.jsonl"}
 
 
 @app.get("/api/stats")
 def get_stats():
-    trades = _read_trades()
+    trades = _journal_trades(0)
     stats = _compute_stats(trades)
     # PERMANENT mirage guard: the rupee `pnl` above is option-PREMIUM-polluted
     # (theta/IV), the source of the old PF~16 fantasy. Attach the trustworthy
@@ -1180,13 +1230,34 @@ async def get_verdict():
         }
 
         # 4. Data-layer truth the panels must not hide.
-        out["dhan"] = {
-            "expired": True,
-            "since": "2026-07-24",
-            "consequence": ("charts + WebSocket dead: live order flow, "
-                            "bid/ask and L2 depth not capturable. Live "
-                            "trades via Dhan unavailable until resubscribed."),
-        }
+        # This was hardcoded `expired: True, since 2026-07-24`. The
+        # subscription was restored on 2026-08-04, so the page kept showing a
+        # red "DHAN DATA API EXPIRED" banner while the header two rows above it
+        # reported "DATA API Active" — the dashboard contradicting itself.
+        # Read the same live probe the header reads; a banner about a dead feed
+        # is only worth anything if it goes away when the feed comes back.
+        try:
+            probe = _dhan_probe_cached()
+            status = probe.get("status")
+            # Only a confirmed 401 is "expired". A 429, a 5xx, an unreachable
+            # host or a probe still in flight are NOT an expired subscription,
+            # and must not raise a banner that tells the user to go and pay.
+            expired = status == "expired"
+            if expired:
+                consequence = probe.get("message") or "subscription expired"
+            elif status == "working":
+                consequence = "data API responding; charts and history available"
+            else:
+                consequence = f"probe status: {status or 'unknown'}"
+            out["dhan"] = {
+                "expired": expired,
+                "status": status,
+                "since": "2026-07-24" if expired else None,
+                "consequence": consequence,
+            }
+        except Exception as e:
+            out["dhan"] = {"expired": False, "status": "unknown",
+                           "consequence": f"probe unavailable: {e}"}
 
         # 5. Rule-based verdicts, one row per strategy lane.
         perf = out.get("journal_perf", {})
@@ -1206,13 +1277,29 @@ async def get_verdict():
             "evidence": "decision 2026-07-21 after exhaustive negative",
             "action": "none - decision is permanent",
         })
+        # Take the CHIP and the PROSE from the same source. These two strings
+        # used to be a frozen snapshot from when the hunt was still open, so
+        # once the registry closed H-009 the row rendered a REJECTED chip
+        # beside "final statistician gate pending" — the tab telling the user
+        # a settled question was still live.
         rsi2 = next((h for h in out.get("hypotheses", [])
                      if "RSI-2" in str(h.get("thesis", ""))), None)
+        rsi2_verdict = str((rsi2 or {}).get("verdict", "UNKNOWN")).upper()
+        if rsi2_verdict.startswith("REJECT"):
+            rsi2_evidence = ("closed: measured trial-Sharpe dispersion sinks the "
+                             "Deflated Sharpe gate at every N")
+            rsi2_action = "do not re-propose - hunt is closed"
+        elif rsi2_verdict == "CONDITIONAL-PASS":
+            rsi2_evidence = "power-passing t=4.43; alive at 0.06-0.10% cost only"
+            rsi2_action = "final statistician gate at 0.10% pending - not live"
+        else:
+            rsi2_evidence = f"registry verdict: {rsi2_verdict.lower()}"
+            rsi2_action = "see hypothesis registry below"
         lanes.append({
             "lane": "RSI-2 mean-reversion (futures)",
-            "verdict": str((rsi2 or {}).get("verdict", "UNKNOWN")),
-            "evidence": "power-passing t=4.43; alive at 0.06-0.10% cost only",
-            "action": "final statistician gate at 0.10% pending - not live",
+            "verdict": rsi2_verdict,
+            "evidence": rsi2_evidence,
+            "action": rsi2_action,
         })
         lanes.append({
             "lane": "Allocation engine (index-core + 200DMA)",
@@ -1220,6 +1307,27 @@ async def get_verdict():
             "evidence": "path #1 decision 2026-06-26; earns market, not alpha",
             "action": "deploy capital + time; monitor monthly (/api/allocation)",
         })
+        # 6. Claims in the tree that nothing ever verified.
+        # The pairs lead read as validated for weeks because its own re-test was
+        # written and never run. research_gates, research_integrity and the
+        # registry all existed and all worked; nothing forced any of them to
+        # fire. Surfacing the audit here is what makes it run without being
+        # remembered.
+        try:
+            from core.claim_audit import unverified
+            findings = unverified()
+            by_file: Dict[str, Any] = {}
+            for f in findings:
+                by_file.setdefault(f.path, []).append(
+                    {"line": f.line_no, "text": f.line})
+            out["claim_audit"] = {
+                "unverified": len(findings),
+                "files": [{"path": k, "hits": v[:3], "n": len(v)}
+                          for k, v in sorted(by_file.items())],
+            }
+        except Exception as e:
+            out["claim_audit"] = {"error": str(e), "unverified": None}
+
         out["lanes"] = lanes
         out["bottom_line"] = (
             "Upgrade question is answered by evidence, not effort: the "
@@ -1236,6 +1344,30 @@ async def get_verdict():
 
 
 # ── Market capture (point-in-time archives + trend state) ───────────────────
+
+@app.get("/api/portfolio")
+async def get_portfolio(equity_capital: float = 500000.0,
+                        options_capital: float = 500000.0,
+                        position_pct: float = 0.10):
+    """Two funded paper books run as an actual ledger.
+
+    Replaces the old "Rs per trade x return" display, which had no pot to draw
+    from: nothing was ever debited, so an unaffordable trade counted the same as
+    an affordable one and 98 open positions looked like 3. Here capital is a
+    real constraint and a skipped signal is reported, not silently paid out.
+    """
+    def _load():
+        from core.paper_portfolio import build_portfolios
+        return _json_safe(build_portfolios(
+            equity_capital=equity_capital,
+            options_capital=options_capital,
+            position_pct=position_pct,
+        ))
+    try:
+        return await _run(_load)
+    except Exception as e:
+        return {"error": str(e)}
+
 
 @app.get("/api/capture")
 async def get_capture():

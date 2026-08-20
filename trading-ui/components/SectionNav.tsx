@@ -40,6 +40,7 @@ export const SECTIONS: Section[] = [
       { href: "/allocation", label: "Allocation" },
       { href: "/accuracy",   label: "Accuracy"   },
       { href: "/journal",    label: "Journal"    },
+      { href: "/portfolio",  label: "Portfolio"  },
       { href: "/trades",     label: "P&L"        },
     ],
   },
