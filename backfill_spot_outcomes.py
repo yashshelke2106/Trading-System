@@ -20,6 +20,7 @@ Replay rules (daily OHLC, NO look-ahead, conservative):
   * No touch by horizon (option_expiry, else +MAX_HOLD trading bars) → TIME_EXIT
     at that bar's close.
   spot_pnl_pct = dir*(exit/entry - 1)*100   (a real spot %, compounds honestly)
+  mfe_pct / mae_pct = best / worst excursion in trade direction over the hold
 
 Run:  .venv/Scripts/python.exe backfill_spot_outcomes.py            # dry, -> new file
       .venv/Scripts/python.exe backfill_spot_outcomes.py --inplace  # after review
@@ -105,13 +106,24 @@ def replay(row, bars):
     sl_fill = sl * (1 - STOP_SLIP) if long else sl * (1 + STOP_SLIP)
     entry_dt = fut.index[0]
 
+    # Excursions, in trade direction, over the bars actually held. The loop
+    # already reads every high and low; it simply threw them away. Persisting
+    # them turns "what target would this book have hit" from a full re-replay
+    # (which needs bars, a live API and a timezone correction) into a query.
+    best = worst = e
+
     def out(exit_px, label, exit_dt):
         dirn = 1.0 if long else -1.0
+        mfe = dirn * (best / e - 1.0) * 100.0
+        mae = dirn * (worst / e - 1.0) * 100.0
         return (label, round(dirn * (exit_px / e - 1.0) * 100.0, 3), float(exit_px),
-                entry_dt, exit_dt)
+                entry_dt, exit_dt, round(mfe, 3), round(mae, 3))
 
     for i, (idx, b) in enumerate(fut.iterrows()):
         o, hi, lo = float(b["open"]), float(b["high"]), float(b["low"])
+        # favourable = up for a long, down for a short
+        best = max(best, hi) if long else min(best, lo)
+        worst = min(worst, lo) if long else max(worst, hi)
         if i > 0:                            # gap-through only on bars AFTER entry bar
             if long and o <= sl:
                 return out(min(o, sl_fill), "SL_HIT", idx)
@@ -162,11 +174,13 @@ def run_backfill(journal: str = JOURNAL, *, inplace: bool = False,
         res = replay(row, bars)
         if res is None:
             skipped_nodata += 1; continue
-        so, sp, xp, entry_dt, exit_dt = res
+        so, sp, xp, entry_dt, exit_dt, mfe, mae = res
         row["spot_outcome"] = so
         row["spot_pnl_pct"] = sp
         row["spot_entry_ts"] = str(entry_dt.date())
         row["spot_exit_ts"] = str(exit_dt.date())
+        row["mfe_pct"] = mfe
+        row["mae_pct"] = mae
         row.setdefault("extra", {})["spot_backfilled"] = True
         filled += 1
         (sl_moves if so == "SL_HIT" else tg_moves if so == "TARGET_HIT" else []).append(sp)

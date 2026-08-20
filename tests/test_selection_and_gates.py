@@ -123,7 +123,8 @@ def test_not_applicable_satisfies_a_gate_explicitly():
          .spread_t(np.random.default_rng(1).normal(0.5, 1.0, 400))
          .point_in_time(True).corp_actions(True)
          .cost_sweep({10: 0.05, 30: 0.02})
-         .not_applicable("6 SHUFFLE", "single parameterisation"))
+         .not_applicable("6 SHUFFLE", "single parameterisation")
+         .fundability(capital=500_000, margin_per_unit=50_000, units_required=4))
     assert r.passed(), r.verdict()
     assert "all gates cleared" in r.verdict()
 
