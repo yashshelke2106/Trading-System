@@ -219,15 +219,33 @@ class RiskEngine:
         max_capital_fraction caps a single position: one lot consuming 92% of
         the account is fundable and still not a position worth taking.
         """
+        # FAIL CLOSED. Both handlers below used to `return True`, so an
+        # exception did not degrade this check - it DELETED it, silently, and
+        # every position it should have blocked went through unmargined. Margin
+        # is the binding constraint on this account (measured 2026-08-20: about
+        # Rs 1.34 lakh per futures leg, so Rs 10 lakh holds three legs), which
+        # makes "allow on error" the most expensive available default. The
+        # reason is recorded on last_margin_block so a refusal is legible
+        # instead of mysterious.
         try:
             from core.margin import estimate
-        except Exception:
-            return True          # never block a trade on an import failure
+        except Exception as e:
+            self.last_margin_block = {
+                "error": f"margin module unavailable: {e}",
+                "note": "refused: affordability could not be checked"}
+            logging.getLogger(__name__).error(
+                "[RISK] margin check unavailable (%s) - refusing %s", e, symbol)
+            return False
         try:
             m = estimate(symbol, price, lots=lots, instrument=instrument,
                          capital=self.capital, premium=premium)
-        except Exception:
-            return True
+        except Exception as e:
+            self.last_margin_block = {
+                "error": f"margin estimate failed: {e}",
+                "note": "refused: affordability could not be checked"}
+            logging.getLogger(__name__).error(
+                "[RISK] margin estimate failed for %s (%s) - refusing", symbol, e)
+            return False
         budget = self.capital * max(0.0, min(1.0, max_capital_fraction))
         if m.total > budget:
             self.last_margin_block = m.to_dict()

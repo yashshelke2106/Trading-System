@@ -160,7 +160,11 @@ class QuantAgent(BaseAgent):
         optimal_qty = max(1, int(risk_amount / sl_dist))
 
         # Lot size rounding
-        lot = config.NSE_LOT_SIZES.get(sym, 1)
+        try:
+            from core.futures_leg import lot_size_for
+            lot = max(1, int(lot_size_for(sym)))
+        except Exception:
+            lot = max(1, int(config.NSE_LOT_SIZES.get(sym, 1)))
         if lot > 1:
             optimal_qty = max(lot, (optimal_qty // lot) * lot)
 

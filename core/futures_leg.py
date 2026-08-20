@@ -25,7 +25,10 @@ from __future__ import annotations
 import logging
 from typing import Dict, Optional
 
-import config
+try:
+    import config
+except Exception:                       # pragma: no cover - config is untracked
+    config = None                       # lot_size_for still answers via scrip_master
 
 log = logging.getLogger(__name__)
 
@@ -41,7 +44,7 @@ def lot_size_for(symbol: str) -> int:
     """NSE F&O lot size — LIVE scrip master first (config.NSE_LOT_SIZES goes
     stale when NSE revises lots), then the static map, then 1 so quantity math
     never breaks."""
-    sym = symbol.upper()
+    sym = str(symbol or "").upper()
     try:
         from core.scrip_master import lot_size as _live_lot
         live = _live_lot(sym)
@@ -49,7 +52,11 @@ def lot_size_for(symbol: str) -> int:
             return int(live)
     except Exception:
         pass
-    return int(getattr(config, "NSE_LOT_SIZES", {}).get(sym, 1))
+    # Static fallback only. Measured 2026-08-20 against the live journal: just
+    # 3 of 70 traded symbols are correct here - 51 are absent (and would size
+    # at ONE SHARE) and 16 are wrong by up to 6x. Never read this map directly;
+    # always come through this function.
+    return max(1, int(getattr(config, "NSE_LOT_SIZES", {}).get(sym, 1)))
 
 
 def attach_futures_leg(s: Dict) -> Optional[Dict]:

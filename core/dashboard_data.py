@@ -413,7 +413,15 @@ def load_signal_journal_frame() -> pd.DataFrame:
 
         # ── Lot size ──────────────────────────────────────────────────────
         def _lot(sym: str) -> int:
-            return int(_cfg.NSE_LOT_SIZES.get(str(sym).upper(), 1))
+            # LIVE scrip master first. Reading config.NSE_LOT_SIZES directly
+            # sized 51 of the journal's 70 symbols at ONE SHARE and got 16 more
+            # wrong by up to 6x, which is what made the rupee column
+            # incomparable across rows in the first place.
+            try:
+                from core.futures_leg import lot_size_for
+                return max(1, int(lot_size_for(sym)))
+            except Exception:
+                return max(1, int(_cfg.NSE_LOT_SIZES.get(str(sym).upper(), 1)))
 
         df["lot_size"] = df["symbol"].apply(_lot) if "symbol" in df.columns else 1
 
@@ -678,7 +686,11 @@ def get_live_signal_tracking() -> List[Dict]:
         except Exception:
             age_min = 0
 
-        lot_size = _cfg.NSE_LOT_SIZES.get(sym.upper(), 1)
+        try:
+            from core.futures_leg import lot_size_for
+            lot_size = max(1, int(lot_size_for(sym)))
+        except Exception:
+            lot_size = max(1, int(_cfg.NSE_LOT_SIZES.get(sym.upper(), 1)))
         unrealized = pct_from_entry / 100.0 * entry * lot_size
 
         tracking.append({
