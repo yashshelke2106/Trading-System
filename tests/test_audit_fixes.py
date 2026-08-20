@@ -154,3 +154,41 @@ def test_no_module_reads_the_stale_lot_map_outside_a_fallback():
     assert not offenders, (
         "config.NSE_LOT_SIZES read outside a fallback (correct for only 3 of 70 "
         "live symbols): " + ", ".join(offenders))
+
+
+# ── 3. strategy gates must default to fail-closed ────────────────────────────
+
+def test_strategy_gates_default_to_fail_closed(monkeypatch):
+    """This flag was ADDED after a sector gate was caught failing open, then
+    defaulted to "0" and was set by no launcher - so the fix for a fail-open
+    gate was a flag that itself defaulted to fail-open."""
+    import importlib
+    monkeypatch.delenv("GATES_FAIL_CLOSED", raising=False)
+    import core.strategy_india_swing as isw
+    importlib.reload(isw)
+    assert isw.GATES_FAIL_CLOSED is True, (
+        "an advanced gate whose module errors must skip the candidate, "
+        "not wave it through")
+
+
+def test_fail_open_remains_available_for_measurement_passes(monkeypatch):
+    """Over-filtering masks the signal being measured, so the escape hatch
+    stays - it just has to be asked for."""
+    import importlib
+    monkeypatch.setenv("GATES_FAIL_CLOSED", "0")
+    import core.strategy_india_swing as isw
+    importlib.reload(isw)
+    assert isw.GATES_FAIL_CLOSED is False
+    monkeypatch.delenv("GATES_FAIL_CLOSED", raising=False)
+    importlib.reload(isw)
+
+
+def test_the_quarantined_ml_model_is_not_loadable():
+    """G10's model was quarantined by RENAMING the artifact; the code path will
+    happily pick up a fresh ml_filter_model.pkl if one ever appears, and no
+    launcher sets DISABLE_G10. Measured: the model picks the WORST trades
+    (-3.04%/trade vs -1.20% baseline, accuracy 0.474 vs 0.868)."""
+    live = os.path.join(ROOT, "logs", "ml_filter_model.pkl")
+    assert not os.path.exists(live), (
+        "a live ml_filter_model.pkl re-arms a gate measured to be actively "
+        "harmful - keep it renamed, or set DISABLE_G10=1 in the launcher")

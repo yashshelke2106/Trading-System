@@ -71,9 +71,22 @@ ATR_LEN               = 14
 # Set PRECISION_MODE=False env to revert to permissive v2 thresholds.
 import os
 PRECISION_MODE = os.environ.get("PRECISION_MODE", "1") != "0"
-# Fail CLOSED (skip the trade) when an advanced gate's module errors, instead of
-# silently passing. Default off; gate errors are logged LOUD (warning) either way.
-GATES_FAIL_CLOSED = os.environ.get("GATES_FAIL_CLOSED", "0") == "1"
+# Fail CLOSED (skip the trade) when an advanced gate's module errors, instead
+# of silently passing. Gate errors are logged LOUD (warning) either way.
+#
+# Default flipped to ON 2026-08-20. This flag was added after a sector gate was
+# caught failing open - and then defaulted to "0" and was set by no launcher,
+# so the fix for a fail-open gate was a flag that itself defaulted to
+# fail-open. Five gates (g6_sector, g7_earnings, g8_delivery, g9_sector_leader,
+# g10_ml) still waved a candidate through whenever their module raised. "I
+# could not check" is not "it is fine": an earnings gate that errors trades
+# straight through results day.
+#
+# Blast radius measured before flipping: zero gate errors across the whole log
+# history, so this refuses nothing that currently passes. Set
+# GATES_FAIL_CLOSED=0 for a measurement pass, where over-filtering would mask
+# the very signal being measured.
+GATES_FAIL_CLOSED = os.environ.get("GATES_FAIL_CLOSED", "1") == "1"
 
 if PRECISION_MODE:
     # NOTE: an earlier v4 tune cut RSI_LONG_MAX to 60 citing "RSI 50-60 = 55%
