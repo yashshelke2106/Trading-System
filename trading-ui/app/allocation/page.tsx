@@ -9,7 +9,7 @@ function fmt(n: number | null | undefined, dec = 2) {
 
 const TH: React.CSSProperties = {
   background: "var(--c2)", color: "var(--txd)",
-  fontSize: ".66em", fontWeight: 700, textTransform: "uppercase",
+  fontSize: ".76em", fontWeight: 700, textTransform: "uppercase",
   letterSpacing: ".08em", padding: "8px 10px",
   borderBottom: "1px solid var(--bdh)", whiteSpace: "nowrap", textAlign: "left",
 }
@@ -28,9 +28,21 @@ interface Comparison {
   curve?: { basket: CurvePoint[]; nifty: CurvePoint[] }
   error?: string
 }
+// stale: true = prices are old, false = verified fresh, null = never checked.
+// null is NOT fresh — it gets its own (amber) treatment below.
+interface DataQuality {
+  checked: boolean | null
+  feed_ok: boolean | null
+  last_bar: string | null
+  age_days: number | null
+  bars_added: number | null
+  stale: boolean | null
+  error: string | null
+}
 interface AllocationData {
   asof: string | null
   instrument: string
+  data_quality?: DataQuality
   nifty?: number
   ma200?: number
   distance_to_flip_pct?: number
@@ -64,8 +76,76 @@ function CurveChart({ curve }: { curve: { basket: CurvePoint[]; nifty: CurvePoin
           textAnchor="middle" fontFamily="'JetBrains Mono',monospace">{String(Number(p.d.slice(0, 4)) + 1)}</text>
       ))}
       <path d={path(curve.nifty)} fill="none" stroke="var(--txd)" strokeWidth={1.5} strokeDasharray="5 4" />
-      <path d={path(curve.basket)} fill="none" stroke="#38b2f0" strokeWidth={2} />
+      <path d={path(curve.basket)} fill="none" stroke="var(--b)" strokeWidth={2} />
     </svg>
+  )
+}
+
+/** Data-quality banner. A dead feed used to render as a perfectly normal
+ *  allocation target (2026-07-24) — this is the thing that makes it visible. */
+function DataQualityBanner({ dq }: { dq?: DataQuality }) {
+  if (!dq) return null
+
+  // Unverified: freshness was never established. Not an error, not a pass.
+  if (dq.stale == null) {
+    return (
+      <div role="status" style={{
+        background: "rgba(245,158,11,.07)", border: "1px solid rgba(245,158,11,.5)",
+        borderRadius: 8, padding: "8px 12px", fontSize: ".84em", color: "var(--y)",
+      }}>
+        ⚠ Feed freshness <strong>not verified</strong> for this reading
+        {dq.last_bar && <> · last bar <code>{dq.last_bar}</code></>}
+        {dq.error && <> · {dq.error}</>}
+        {" "}— hit “Refresh Data &amp; Recompute” to confirm the target is current.
+      </div>
+    )
+  }
+
+  if (!dq.stale) {
+    return (
+      <div style={{ fontSize: ".78em", color: "var(--txs)", fontFamily: "'JetBrains Mono', monospace" }}>
+        ✓ feed verified · last bar {dq.last_bar ?? "—"}
+        {dq.age_days != null && <> ({dq.age_days}d old)</>}
+        {dq.bars_added != null && <> · {dq.bars_added} new bar{dq.bars_added === 1 ? "" : "s"}</>}
+      </div>
+    )
+  }
+
+  return (
+    <div role="alert" style={{
+      background: "rgba(255,61,94,.12)", border: "2px solid var(--r)", borderRadius: 8,
+      padding: "14px 18px", color: "var(--r)",
+      boxShadow: "0 0 0 4px rgba(255,61,94,.08)",
+    }}>
+      <div style={{
+        fontSize: "1.05em", fontWeight: 800, letterSpacing: ".06em",
+        textTransform: "uppercase", marginBottom: 8,
+      }}>
+        ⛔ Stale data — this target is NOT current
+      </div>
+      <div style={{
+        fontFamily: "'JetBrains Mono', monospace", fontSize: ".8em",
+        display: "flex", gap: 18, flexWrap: "wrap", marginBottom: 8,
+      }}>
+        <span>last bar: <strong>{dq.last_bar ?? "unknown"}</strong></span>
+        <span>age: <strong>{dq.age_days != null ? `${dq.age_days} day${dq.age_days === 1 ? "" : "s"}` : "unknown"}</strong></span>
+        <span>feed_ok: <strong>{String(dq.feed_ok)}</strong></span>
+        {dq.bars_added != null && <span>bars added: <strong>{dq.bars_added}</strong></span>}
+      </div>
+      {dq.error && (
+        <div style={{
+          fontFamily: "'JetBrains Mono', monospace", fontSize: ".76em",
+          background: "rgba(0,0,0,.25)", borderRadius: 4, padding: "6px 8px",
+          marginBottom: 8, whiteSpace: "pre-wrap", wordBreak: "break-word",
+        }}>
+          {dq.error}
+        </div>
+      )}
+      <div style={{ fontSize: ".82em", fontWeight: 600 }}>
+        The allocation below was computed from OLD prices. Do <strong>not</strong> rebalance
+        on it — fix the data feed and re-run before acting.
+      </div>
+    </div>
   )
 }
 
@@ -92,29 +172,36 @@ export default function AllocationPage() {
   }, [reload])
 
   const t = data?.targets?.[variant]
+  const dq = data?.data_quality
+  const stale = dq?.stale === true
   const riskOn = t?.state === "risk_on" || t?.state === "core_only"
-  const stateClr = riskOn ? "#00c896" : "#f59e0b"
+  // A stale target must not be able to render as a confident green risk_on.
+  const stateClr = stale ? "var(--r)" : riskOn ? "var(--g)" : "var(--y)"
   const horizon = data?.horizon_accuracy?.[variant] ?? []
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      {/* Data-quality first — it decides whether anything below is actionable */}
+      <DataQualityBanner dq={dq} />
+
       {/* Section header */}
       <div className="secHdr">
-        <div className="secDot" style={{ background: "#38b2f0" }} />
+        <div className="secDot" style={{ background: stale ? "var(--r)" : "var(--b)" }} />
         <div className="secTitle">Path-#1 Allocation · Capture the Equity Premium Cheaply</div>
       </div>
 
-      {/* Flip alert */}
-      {data?.alert && (
+      {/* Flip alert — suppressed when stale: the banner above already says the
+          louder, truer thing, and a flip computed from dead prices isn't a flip */}
+      {data?.alert && !stale && (
         <div style={{
-          background: "rgba(245,158,11,.08)", border: "1px solid #f59e0b",
-          borderRadius: 8, padding: "10px 14px", fontSize: ".82em", color: "#f59e0b", fontWeight: 600,
+          background: "rgba(245,158,11,.08)", border: "1px solid var(--y)",
+          borderRadius: 8, padding: "10px 14px", fontSize: ".82em", color: "var(--y)", fontWeight: 600,
         }}>
           ⚠ {data.alert}
         </div>
       )}
       {data?.error && (
-        <div style={{ color: "#ff3d5e", fontSize: ".8em" }}>API error: {data.error}</div>
+        <div style={{ color: "var(--r)", fontSize: ".8em" }}>API error: {data.error}</div>
       )}
 
       {/* Variant toggle */}
@@ -122,9 +209,9 @@ export default function AllocationPage() {
         {VARIANTS.map(v => (
           <button key={v.id} onClick={() => setVariant(v.id)} style={{
             padding: "7px 14px", border: "none", cursor: "pointer", background: "transparent",
-            borderBottom: variant === v.id ? "2px solid #38b2f0" : "2px solid transparent",
-            color: variant === v.id ? "#38b2f0" : "var(--txd)",
-            fontSize: ".7em", fontWeight: 600, textTransform: "uppercase", letterSpacing: ".08em",
+            borderBottom: variant === v.id ? "2px solid var(--b)" : "2px solid transparent",
+            color: variant === v.id ? "var(--b)" : "var(--txd)",
+            fontSize: ".80em", fontWeight: 600, textTransform: "uppercase", letterSpacing: ".08em",
           }}>
             {v.label}
           </button>
@@ -135,25 +222,27 @@ export default function AllocationPage() {
       {t && (
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(160px,1fr))", gap: 8 }}>
           <div style={{ background: "var(--c1)", border: `1px solid ${stateClr}`, borderRadius: 8, padding: "10px 14px" }}>
-            <div style={{ fontSize: ".58em", fontWeight: 600, textTransform: "uppercase", letterSpacing: ".1em", color: "var(--txs)", marginBottom: 3 }}>State · {data?.asof ?? ""}</div>
+            <div style={{ fontSize: ".70em", fontWeight: 600, textTransform: "uppercase", letterSpacing: ".1em", color: stale ? "var(--r)" : "var(--txs)", marginBottom: 3 }}>
+              State · {data?.asof ?? ""}{stale && " · NOT CURRENT"}
+            </div>
             <div style={{ fontSize: "1.3em", fontWeight: 700, color: stateClr, fontFamily: "'JetBrains Mono', monospace" }}>
               {t.state.replace("_", " ").toUpperCase()}
             </div>
           </div>
           <div style={{ background: "var(--c1)", border: "1px solid var(--bd)", borderRadius: 8, padding: "10px 14px" }}>
-            <div style={{ fontSize: ".58em", fontWeight: 600, textTransform: "uppercase", letterSpacing: ".1em", color: "var(--txs)", marginBottom: 3 }}>Equity ({data?.instrument})</div>
-            <div style={{ fontSize: "1.3em", fontWeight: 700, color: "#00c896", fontFamily: "'JetBrains Mono', monospace" }}>{fmt((t.equity_weight ?? 0) * 100, 0)}%</div>
+            <div style={{ fontSize: ".70em", fontWeight: 600, textTransform: "uppercase", letterSpacing: ".1em", color: "var(--txs)", marginBottom: 3 }}>Equity ({data?.instrument})</div>
+            <div style={{ fontSize: "1.3em", fontWeight: 700, color: "var(--g)", fontFamily: "'JetBrains Mono', monospace" }}>{fmt((t.equity_weight ?? 0) * 100, 0)}%</div>
           </div>
           <div style={{ background: "var(--c1)", border: "1px solid var(--bd)", borderRadius: 8, padding: "10px 14px" }}>
-            <div style={{ fontSize: ".58em", fontWeight: 600, textTransform: "uppercase", letterSpacing: ".1em", color: "var(--txs)", marginBottom: 3 }}>Cash / Liquid</div>
+            <div style={{ fontSize: ".70em", fontWeight: 600, textTransform: "uppercase", letterSpacing: ".1em", color: "var(--txs)", marginBottom: 3 }}>Cash / Liquid</div>
             <div style={{ fontSize: "1.3em", fontWeight: 700, color: "var(--tx)", fontFamily: "'JetBrains Mono', monospace" }}>{fmt((t.cash_weight ?? 0) * 100, 0)}%</div>
           </div>
           {data?.nifty != null && (
             <div style={{ background: "var(--c1)", border: "1px solid var(--bd)", borderRadius: 8, padding: "10px 14px" }}>
-              <div style={{ fontSize: ".58em", fontWeight: 600, textTransform: "uppercase", letterSpacing: ".1em", color: "var(--txs)", marginBottom: 3 }}>NIFTY vs 200-DMA</div>
-              <div style={{ fontSize: "1.05em", fontWeight: 700, fontFamily: "'JetBrains Mono', monospace", color: (data.distance_to_flip_pct ?? 0) >= 0 ? "#00c896" : "#f59e0b" }}>
+              <div style={{ fontSize: ".70em", fontWeight: 600, textTransform: "uppercase", letterSpacing: ".1em", color: "var(--txs)", marginBottom: 3 }}>NIFTY vs 200-DMA</div>
+              <div style={{ fontSize: "1.05em", fontWeight: 700, fontFamily: "'JetBrains Mono', monospace", color: (data.distance_to_flip_pct ?? 0) >= 0 ? "var(--g)" : "var(--y)" }}>
                 {fmt(data.nifty, 0)} / {fmt(data.ma200, 0)}
-                <span style={{ fontSize: ".72em", marginLeft: 6 }}>
+                <span style={{ fontSize: ".82em", marginLeft: 6 }}>
                   ({(data.distance_to_flip_pct ?? 0) >= 0 ? "+" : ""}{fmt(data.distance_to_flip_pct, 2)}%)
                 </span>
               </div>
@@ -161,11 +250,11 @@ export default function AllocationPage() {
           )}
         </div>
       )}
-      {t && <div style={{ fontSize: ".74em", color: "var(--txd)" }}>{t.note}</div>}
+      {t && <div style={{ fontSize: ".84em", color: "var(--txd)" }}>{t.note}</div>}
 
       {/* Backtest summary */}
       <div className="secHdr">
-        <div className="secDot" style={{ background: "#a78bfa" }} />
+        <div className="secDot" style={{ background: "var(--p)" }} />
         <div className="secTitle">Honest Backtest · net of switch cost, ETF expense, cash yield</div>
       </div>
       <div style={{ overflow: "auto", border: "1px solid var(--bd)", borderRadius: 8, background: "var(--c1)" }}>
@@ -178,10 +267,10 @@ export default function AllocationPage() {
               return (
                 <tr key={v.id} style={{ background: variant === v.id ? "rgba(56,178,240,.05)" : "transparent" }}>
                   <td style={{ ...TD, fontWeight: variant === v.id ? 700 : 400 }}>{v.label}</td>
-                  <td style={{ ...TD, color: "#00c896", fontWeight: 700 }}>{fmt(p.cagr * 100, 2)}%</td>
+                  <td style={{ ...TD, color: "var(--g)", fontWeight: 700 }}>{fmt(p.cagr * 100, 2)}%</td>
                   <td style={TD}>{fmt(p.vol * 100, 1)}%</td>
                   <td style={TD}>{fmt(p.sharpe, 2)}</td>
-                  <td style={{ ...TD, color: "#ff3d5e" }}>{fmt(p.max_dd * 100, 1)}%</td>
+                  <td style={{ ...TD, color: "var(--r)" }}>{fmt(p.max_dd * 100, 1)}%</td>
                   <td style={{ ...TD, color: "var(--txs)" }}>{fmt(p.years, 1)}</td>
                 </tr>
               )
@@ -192,7 +281,7 @@ export default function AllocationPage() {
 
       {/* Accuracy by holding horizon */}
       <div className="secHdr">
-        <div className="secDot" style={{ background: "#00c896" }} />
+        <div className="secDot" style={{ background: "var(--g)" }} />
         <div className="secTitle">Probability of Profit by Holding Period</div>
       </div>
       <div style={{ overflow: "auto", border: "1px solid var(--bd)", borderRadius: 8, background: "var(--c1)" }}>
@@ -204,15 +293,15 @@ export default function AllocationPage() {
             )}
             {horizon.map(h => {
               const acc = h.accuracy * 100
-              const accClr = acc >= 70 ? "#00c896" : acc >= 60 ? "#f59e0b" : "var(--tx)"
+              const accClr = acc >= 70 ? "var(--g)" : acc >= 60 ? "var(--y)" : "var(--tx)"
               return (
                 <tr key={h.horizon}>
                   <td style={{ ...TD, fontWeight: 600 }}>{h.horizon}</td>
                   <td style={{ ...TD, fontWeight: 700, color: accClr }}>{fmt(acc, 1)}%</td>
-                  <td style={{ ...TD, color: h.avg_return >= 0 ? "#00c896" : "#ff3d5e" }}>
+                  <td style={{ ...TD, color: h.avg_return >= 0 ? "var(--g)" : "var(--r)" }}>
                     {h.avg_return >= 0 ? "+" : ""}{fmt(h.avg_return * 100, 2)}%
                   </td>
-                  <td style={{ ...TD, color: h.worst >= 0 ? "#00c896" : "#ff3d5e" }}>{fmt(h.worst * 100, 2)}%</td>
+                  <td style={{ ...TD, color: h.worst >= 0 ? "var(--g)" : "var(--r)" }}>{fmt(h.worst * 100, 2)}%</td>
                   <td style={{ ...TD, color: "var(--txs)" }}>{h.windows}</td>
                 </tr>
               )
@@ -220,7 +309,7 @@ export default function AllocationPage() {
           </tbody>
         </table>
       </div>
-      <div style={{ fontSize: ".7em", color: "var(--txs)" }}>
+      <div style={{ fontSize: ".80em", color: "var(--txs)" }}>
         Overlapping windows — reads as &quot;odds of profit entering on a random day,&quot; not independent samples.
         Accuracy here comes from premium accrual over time, not prediction. Judge decisions on the 6–12 month frame.
       </div>
@@ -229,12 +318,12 @@ export default function AllocationPage() {
       {data?.comparison?.curve && (
         <>
           <div className="secHdr">
-            <div className="secDot" style={{ background: "#f59e0b" }} />
+            <div className="secDot" style={{ background: "var(--y)" }} />
             <div className="secTitle">{data.comparison.label ?? "Comparison"} vs NIFTY · Growth of ₹100</div>
           </div>
           <div style={{ border: "1px solid var(--bd)", borderRadius: 8, background: "var(--c1)", padding: "14px 10px 6px" }}>
-            <div style={{ display: "flex", gap: 16, fontSize: ".68em", color: "var(--txd)", padding: "0 8px 8px" }}>
-              <span><span style={{ display: "inline-block", width: 18, height: 3, background: "#38b2f0", verticalAlign: "middle", marginRight: 6 }} />{data.comparison.label}</span>
+            <div style={{ display: "flex", gap: 16, fontSize: ".78em", color: "var(--txd)", padding: "0 8px 8px" }}>
+              <span><span style={{ display: "inline-block", width: 18, height: 3, background: "var(--b)", verticalAlign: "middle", marginRight: 6 }} />{data.comparison.label}</span>
               <span><span style={{ display: "inline-block", width: 18, height: 0, borderTop: "2px dashed var(--txd)", verticalAlign: "middle", marginRight: 6 }} />NIFTY 50</span>
               {data.comparison.backtest && (
                 <span style={{ marginLeft: "auto", fontFamily: "'JetBrains Mono',monospace" }}>
@@ -246,7 +335,7 @@ export default function AllocationPage() {
           </div>
           <div style={{
             background: "rgba(245,158,11,.06)", border: "1px solid rgba(245,158,11,.4)",
-            borderRadius: 8, padding: "8px 12px", fontSize: ".72em", color: "#f59e0b",
+            borderRadius: 8, padding: "8px 12px", fontSize: ".82em", color: "var(--y)",
           }}>
             ⚠ {data.comparison.caveat}
           </div>
@@ -263,7 +352,7 @@ export default function AllocationPage() {
         }}>
           {refreshing ? "Refreshing…" : "↻ Refresh Data & Recompute"}
         </button>
-        <span style={{ fontSize: ".68em", color: "var(--txs)", marginLeft: "auto" }}>
+        <span style={{ fontSize: ".78em", color: "var(--txs)", marginLeft: "auto" }}>
           Execution is manual (Dhan / DEXT T3). No orders are placed — PAPER_TRADE stays on.
         </span>
       </div>

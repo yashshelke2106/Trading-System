@@ -14,7 +14,15 @@
       "Bash(tasklist /FI \"WINDOWTITLE eq *Aladdin*\")",
       "Bash(mkdir -p \"C:\\\\Users\\\\yashs\\\\.claude\\\\skills\\\\ema-volume-confirmation-workspace\\\\iteration-1\\\\eval-2-failed-long-diagnosis\\\\without_skill\\\\outputs\")",
       "Read(//c/Users/yashs/.claude/skills/sensor/**)",
-      "Read(//c/Users/yashs/.claude/skills/sensor/scripts/**)"
+      "Read(//c/Users/yashs/.claude/skills/sensor/scripts/**)",
+      "Bash(grep -iA3 -m1 \"verdict\" docs/research/cash_equity_fno_edge.md)",
+      "Bash(ps -W)",
+      "Bash(ls -la tmp_stat_test/)",
+      "Bash(ls tmp_stat_test/*.py tmp_stat_test/*.md tmp_stat_test/*.csv)",
+      "Bash(tasklist)"
     ]
-  }
+  },
+  "enabledMcpjsonServers": [
+    "code-review-graph"
+  ]
 }

@@ -19,7 +19,7 @@ export default function VersionStamp() {
   if (!v) return null
   return (
     <div style={{
-      fontSize: ".62em", color: "var(--txs)", fontFamily: "'JetBrains Mono', monospace",
+      fontSize: ".72em", color: "var(--txs)", fontFamily: "'JetBrains Mono', monospace",
       padding: "10px 0 4px", borderTop: "1px solid var(--bd)", marginTop: 20,
       display: "flex", gap: 12, flexWrap: "wrap", alignItems: "center",
     }}>

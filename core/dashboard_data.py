@@ -827,29 +827,174 @@ def today_trades_frame() -> pd.DataFrame:
 
 
 def get_index_quotes() -> Dict[str, Dict]:
-    """Fetch Nifty50, BankNifty, India VIX via Dhan daily bars (30s cache)."""
+    """Nifty50 / BankNifty / FinNifty / India VIX — {ltp, chg, pct} each.
+
+    NSE's public feed carries last, previousClose and percentChange, which is
+    everything this returns — so the normal path costs ZERO Dhan /charts/*
+    calls. That matters: this is polled by both the legacy Streamlit dashboard
+    and /api/indices, and /charts/* is a 1 req/sec budget shared cross-process
+    with the live scanner. Routing this through get_index_panel (which fetches
+    bars) put three pollers on that budget at once and drew Dhan 429s.
+
+    Bars are only consulted if NSE is unreachable. get_index_panel is the one
+    that legitimately needs them, for the intraday path it draws.
+
+    This does NOT use daily bars: they do not carry today's forming session,
+    so during market hours the old version reported the PREVIOUS session's
+    move (on 2026-08-11 at 09:34 IST, Monday's close against Friday's) while
+    presenting it as the current quote.
+    """
     def loader() -> Dict[str, Dict]:
         try:
-            from core.api_dhan import dhan_daily
-            _SYM = {"NIFTY50": "NIFTY", "BANKNIFTY": "BANKNIFTY", "INDIAVIX": "INDIAVIX"}
-            out: Dict[str, Dict] = {}
-            for name, sym in _SYM.items():
-                try:
-                    df = dhan_daily(sym, days_back=5)
-                    if df is None or df.empty:
-                        out[name] = {"ltp": 0, "chg": 0, "pct": 0}
-                        continue
-                    ltp  = float(df["close"].iloc[-1])
-                    prev = float(df["close"].iloc[-2]) if len(df) >= 2 else ltp
-                    chg  = ltp - prev
-                    pct  = chg / prev * 100 if prev > 0 else 0.0
-                    out[name] = {"ltp": round(ltp, 2), "chg": round(chg, 2), "pct": round(pct, 2)}
-                except Exception:
-                    out[name] = {"ltp": 0, "chg": 0, "pct": 0}
-            return out
+            from core.live_quotes import get_index_quotes as _live
+            live = _live()
         except Exception:
-            return {}
-    return dict(_cached("index:quotes", 30, loader))
+            live = {}
+
+        if not live:
+            # NSE down — fall back to the bar-backed panel rather than report
+            # nothing. Costs chart calls, which is why it is not the default.
+            try:
+                panel = get_index_panel()
+            except Exception:
+                return {}
+            return {k: {"ltp": e["ltp"], "chg": e["chg"], "pct": e["pct"]}
+                    for k, e in panel.items()}
+
+        out: Dict[str, Dict] = {}
+        for key, _dhan_sym, live_key, _name in INDEX_PANEL:
+            q = live.get(live_key)
+            ltp = float(getattr(q, "last", 0) or 0) if q is not None else 0.0
+            prev = float(getattr(q, "prev_close", 0) or 0) if q is not None else 0.0
+            chg = ltp - prev if (ltp > 0 and prev > 0) else 0.0
+            out[key] = {
+                "ltp": round(ltp, 2),
+                "chg": round(chg, 2),
+                "pct": round(chg / prev * 100, 2) if (chg and prev > 0) else 0.0,
+            }
+        return out
+
+    return dict(_cached("index:quotes", 20, loader))
+
+
+# ── Index strip: intraday path + live price ──────────────────────────────────
+#
+# Dashboard label → (Dhan chart symbol, live_quotes key, display name).
+# MIDCAP100 is deliberately absent: NSE quotes it but Dhan has no security id
+# for it, so it would render as a price with no intraday path behind it.
+INDEX_PANEL: Tuple[Tuple[str, str, str, str], ...] = (
+    ("NIFTY50",   "NIFTY",     "NIFTY",     "Nifty 50"),
+    ("BANKNIFTY", "BANKNIFTY", "BANKNIFTY", "Bank Nifty"),
+    ("FINNIFTY",  "FINNIFTY",  "FINNIFTY",  "Fin Nifty"),
+    ("INDIAVIX",  "INDIAVIX",  "INDIAVIX",  "India VIX"),
+)
+
+# Dhan returns bar timestamps as epoch seconds for the IST wall clock, which
+# pandas reads back as UTC — every bar lands 5h30 early. Undo that before
+# splitting into sessions, or 09:15 IST is filed under the previous day.
+_IST_OFFSET = timedelta(hours=5, minutes=30)
+_CHART_INTERVALS = (1, 5, 15, 25, 60)
+
+
+def _empty_index_entry(name: str, error: str = "") -> Dict:
+    entry = {
+        "name": name, "ltp": 0.0, "prev_close": 0.0, "chg": 0.0, "pct": 0.0,
+        "open": 0.0, "high": 0.0, "low": 0.0,
+        "bars": [], "session_date": "", "is_today": False,
+        "last_bar": "", "quote_ts": "", "source": "",
+    }
+    if error:
+        entry["error"] = error
+    return entry
+
+
+def get_index_panel(interval_min: int = 5) -> Dict[str, Dict]:
+    """Today's intraday path plus the live price for each dashboard index.
+
+    Two sources, each used for what it is actually best at:
+
+      * the SHAPE of the day comes from Dhan intraday bars. Those are cached
+        60s in api_dhan and paced by a 1 req/sec chart throttle shared with
+        the live scanner, so this must not be polled harder than that;
+      * the LIVE PRICE comes from NSE's public allIndices feed — seconds
+        fresh, and it costs none of that chart budget.
+
+    The two agree: NSE's previousClose and the previous session's last Dhan
+    bar were both 24583.80 for NIFTY on 2026-08-11, which is what lets the
+    previous close be read off the bars instead of a second historical call.
+
+    Never fabricates. A source that fails leaves its fields at 0/[] and sets
+    "error" — the strip then shows the gap instead of a plausible number.
+    """
+    interval = int(interval_min) if int(interval_min) in _CHART_INTERVALS else 5
+
+    def loader() -> Dict[str, Dict]:
+        from core.api_dhan import dhan_intraday
+
+        # One NSE call covers every index; failure here is survivable because
+        # the bars still carry a (slightly older) price.
+        try:
+            from core.live_quotes import get_index_quotes as _live
+            live = _live()
+        except Exception:
+            live = {}
+
+        out: Dict[str, Dict] = {}
+        for key, dhan_sym, live_key, name in INDEX_PANEL:
+            entry = _empty_index_entry(name)
+            try:
+                # 5 calendar days back so the previous session is still in
+                # range after a long weekend; Dhan caps 1-min history at 5.
+                df = dhan_intraday(dhan_sym, interval_min=interval, days_back=5)
+            except Exception as exc:
+                df = pd.DataFrame()
+                entry["error"] = f"bars: {exc}"
+
+            if df is not None and not df.empty and "date" in df.columns:
+                ist = pd.to_datetime(df["date"]) + _IST_OFFSET
+                df = df.assign(_ist=ist, _day=ist.dt.date).sort_values("_ist")
+                days = list(dict.fromkeys(df["_day"].tolist()))
+                session = df[df["_day"] == days[-1]]
+
+                entry["session_date"] = str(days[-1])
+                entry["is_today"] = days[-1] == datetime.now().date()
+                entry["bars"] = [
+                    {"t": t.strftime("%H:%M"), "c": round(float(c), 2)}
+                    for t, c in zip(session["_ist"], session["close"])
+                ]
+                entry["last_bar"] = session["_ist"].iloc[-1].strftime("%H:%M")
+                entry["ltp"] = round(float(session["close"].iloc[-1]), 2)
+                entry["open"] = round(float(session["open"].iloc[0]), 2)
+                entry["high"] = round(float(session["high"].max()), 2)
+                entry["low"] = round(float(session["low"].min()), 2)
+                entry["source"] = "dhan_bars"
+                if len(days) >= 2:
+                    prev = df[df["_day"] == days[-2]]
+                    entry["prev_close"] = round(float(prev["close"].iloc[-1]), 2)
+
+            # Live price wins when NSE answered — it is seconds fresh where the
+            # last bar can be a full interval old.
+            q = live.get(live_key)
+            if q is not None and getattr(q, "last", 0):
+                entry["ltp"] = round(float(q.last), 2)
+                entry["quote_ts"] = q.ts or ""
+                entry["source"] = q.source
+                if getattr(q, "prev_close", None):
+                    entry["prev_close"] = round(float(q.prev_close), 2)
+
+            prev_close, ltp = entry["prev_close"], entry["ltp"]
+            if prev_close > 0 and ltp > 0:
+                entry["chg"] = round(ltp - prev_close, 2)
+                entry["pct"] = round((ltp - prev_close) / prev_close * 100, 2)
+
+            if not entry["bars"] and not entry.get("error"):
+                entry["error"] = "no intraday bars"
+            out[key] = entry
+        return out
+
+    # 15s: short enough that a new NSE price surfaces quickly, long enough that
+    # several open browser tabs collapse into one upstream fetch.
+    return dict(_cached(f"index:panel:{interval}", 15, loader))
 
 
 def calc_chain_analytics(chain: List[Dict]) -> Dict:

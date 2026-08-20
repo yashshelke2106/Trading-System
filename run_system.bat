@@ -24,7 +24,8 @@ python swing_tracker.py
 REM ── [4/5] Core processes ────────────────────────────────────────
 echo [4/5] Starting scanner, executor, API...
 start "FO-Scanner"  cmd /k "color 0A && echo [SCANNER] && python scan_only_v2.py"
-start "FO-Executor" cmd /k "color 0D && echo [EXECUTOR paper] && python aladdin_runner.py"
+REM scan_only_v2 owns signals.json; do not start Aladdin's legacy duplicate scanner.
+start "FO-Executor" cmd /k "color 0D && echo [EXECUTOR paper] && python aladdin_runner.py --no-scan"
 start "FO-API"      cmd /k "color 0B && echo [API :8000] && python -m uvicorn api_server:app --port 8000"
 
 REM ── [5/5] Both UIs ───────────────────────────────────────────────

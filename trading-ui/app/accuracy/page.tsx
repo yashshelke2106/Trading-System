@@ -10,7 +10,7 @@ function fmt(n: number | null | undefined, dec = 2) {
 
 const TH: React.CSSProperties = {
   background: "var(--c2)", color: "var(--txd)",
-  fontSize: ".66em", fontWeight: 700, textTransform: "uppercase",
+  fontSize: ".76em", fontWeight: 700, textTransform: "uppercase",
   letterSpacing: ".08em", padding: "8px 10px",
   borderBottom: "1px solid var(--bdh)", whiteSpace: "nowrap", textAlign: "left",
 }
@@ -70,7 +70,7 @@ export default function AccuracyPage() {
 
   const ps = accuracy?.pnl_summary ?? {}
   const tracking = accuracy?.tracking ?? []
-  const pnlClr = (v: number) => v > 0 ? "#00c896" : v < 0 ? "#ff3d5e" : "var(--tx)"
+  const pnlClr = (v: number) => v > 0 ? "var(--g)" : v < 0 ? "var(--r)" : "var(--tx)"
 
   const TABS = [
     { id: "params",   label: "Parameters" },
@@ -85,7 +85,7 @@ export default function AccuracyPage() {
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
       {/* Section header */}
       <div className="secHdr">
-        <div className="secDot" style={{ background: "#a78bfa" }} />
+        <div className="secDot" style={{ background: "var(--p)" }} />
         <div className="secTitle">Signal Accuracy · Self-Learning Engine</div>
       </div>
 
@@ -95,15 +95,15 @@ export default function AccuracyPage() {
           {[
             { k: "total_signals",    lbl: "Total Signals",  dec: 0, suffix: "" },
             { k: "closed_signals",   lbl: "Closed",         dec: 0, suffix: "" },
-            { k: "target_hit",       lbl: "Target Hit",     dec: 0, suffix: "", clr: "#00c896" },
-            { k: "sl_hit",           lbl: "SL Hit",         dec: 0, suffix: "", clr: "#ff3d5e" },
+            { k: "target_hit",       lbl: "Target Hit",     dec: 0, suffix: "", clr: "var(--g)" },
+            { k: "sl_hit",           lbl: "SL Hit",         dec: 0, suffix: "", clr: "var(--r)" },
             { k: "win_rate_pct",     lbl: "Win Rate",       dec: 1, suffix: "%",
-              clr: (ps.win_rate_pct ?? 0) >= 50 ? "#00c896" : "#ff3d5e" },
+              clr: (ps.win_rate_pct ?? 0) >= 50 ? "var(--g)" : "var(--r)" },
             { k: "total_pnl_rupees", lbl: "Total P&L",      dec: 0, suffix: "", clr: pnlClr(ps.total_pnl_rupees ?? 0) },
             { k: "avg_pnl_rupees",   lbl: "Avg P&L",        dec: 0, suffix: "", clr: pnlClr(ps.avg_pnl_rupees ?? 0) },
           ].filter(({ k }) => ps[k] != null).map(({ k, lbl, dec, suffix, clr }) => (
             <div key={k} style={{ background: "var(--c1)", border: "1px solid var(--bd)", borderRadius: 8, padding: "10px 14px" }}>
-              <div style={{ fontSize: ".58em", fontWeight: 600, textTransform: "uppercase", letterSpacing: ".1em", color: "var(--txs)", marginBottom: 3 }}>{lbl}</div>
+              <div style={{ fontSize: ".70em", fontWeight: 600, textTransform: "uppercase", letterSpacing: ".1em", color: "var(--txs)", marginBottom: 3 }}>{lbl}</div>
               <div style={{ fontSize: "1.3em", fontWeight: 700, color: clr ?? "var(--tx)", fontFamily: "'JetBrains Mono', monospace" }}>
                 {k.endsWith("_rupees") ? `₹${fmt(ps[k], dec)}` : `${fmt(ps[k], dec)}${suffix}`}
               </div>
@@ -130,11 +130,11 @@ export default function AccuracyPage() {
           Reset to Defaults
         </button>
         {triggerMsg && (
-          <span style={{ fontSize: ".76em", color: triggerMsg.startsWith("Error") ? "#ff3d5e" : "#00c896" }}>
+          <span style={{ fontSize: ".76em", color: triggerMsg.startsWith("Error") ? "var(--r)" : "var(--g)" }}>
             {triggerMsg}
           </span>
         )}
-        <span style={{ fontSize: ".68em", color: "var(--txs)", marginLeft: "auto" }}>
+        <span style={{ fontSize: ".78em", color: "var(--txs)", marginLeft: "auto" }}>
           Needs ≥20 resolved trades. Runs auto every 10 scans.
         </span>
       </div>
@@ -145,9 +145,9 @@ export default function AccuracyPage() {
           <button key={t.id} onClick={() => setActiveTab(t.id)} style={{
             padding: "7px 14px", border: "none", cursor: "pointer",
             background: "transparent",
-            borderBottom: activeTab === t.id ? "2px solid #a78bfa" : "2px solid transparent",
-            color: activeTab === t.id ? "#a78bfa" : "var(--txd)",
-            fontSize: ".7em", fontWeight: 600, textTransform: "uppercase", letterSpacing: ".08em",
+            borderBottom: activeTab === t.id ? "2px solid var(--p)" : "2px solid transparent",
+            color: activeTab === t.id ? "var(--p)" : "var(--txd)",
+            fontSize: ".80em", fontWeight: 600, textTransform: "uppercase", letterSpacing: ".08em",
           }}>
             {t.label}
           </button>
@@ -170,12 +170,12 @@ export default function AccuracyPage() {
                 const changed = Math.abs(delta) > 0.001
                 return (
                   <tr key={p.param}>
-                    <td style={{ ...TD, fontWeight: 700, color: changed ? "#f59e0b" : "var(--tx)" }}>{p.param}</td>
-                    <td style={{ ...TD, color: "var(--txd)", fontSize: ".72em" }}>{p.section}</td>
+                    <td style={{ ...TD, fontWeight: 700, color: changed ? "var(--y)" : "var(--tx)" }}>{p.param}</td>
+                    <td style={{ ...TD, color: "var(--txd)", fontSize: ".82em" }}>{p.section}</td>
                     <td style={TD}>{p.default}</td>
-                    <td style={{ ...TD, fontWeight: changed ? 700 : 400, color: changed ? "#f59e0b" : "var(--tx)" }}>{p.current}</td>
+                    <td style={{ ...TD, fontWeight: changed ? 700 : 400, color: changed ? "var(--y)" : "var(--tx)" }}>{p.current}</td>
                     <td style={{ ...TD, color: "var(--txs)" }}>{p.min}–{p.max}</td>
-                    <td style={{ ...TD, color: delta > 0 ? "#00c896" : delta < 0 ? "#ff3d5e" : "var(--txs)" }}>
+                    <td style={{ ...TD, color: delta > 0 ? "var(--g)" : delta < 0 ? "var(--r)" : "var(--txs)" }}>
                       {changed ? `${delta > 0 ? "+" : ""}${delta}` : "—"}
                     </td>
                   </tr>
@@ -201,10 +201,10 @@ export default function AccuracyPage() {
                 .map(([pattern, s]) => (
                   <tr key={pattern}>
                     <td style={{ ...TD, fontWeight: 600 }}>{pattern}</td>
-                    <td style={{ ...TD, color: "#00c896" }}>{s.wins}</td>
-                    <td style={{ ...TD, color: "#ff3d5e" }}>{s.losses}</td>
+                    <td style={{ ...TD, color: "var(--g)" }}>{s.wins}</td>
+                    <td style={{ ...TD, color: "var(--r)" }}>{s.losses}</td>
                     <td style={TD}>{s.total}</td>
-                    <td style={{ ...TD, fontWeight: 700, color: s.win_rate >= 0.6 ? "#00c896" : s.win_rate < 0.4 ? "#ff3d5e" : "#f59e0b" }}>
+                    <td style={{ ...TD, fontWeight: 700, color: s.win_rate >= 0.6 ? "var(--g)" : s.win_rate < 0.4 ? "var(--r)" : "var(--y)" }}>
                       {(s.win_rate * 100).toFixed(1)}%
                     </td>
                     <td style={{ ...TD, color: pnlClr(s.avg_pnl) }}>₹{fmt(s.avg_pnl, 0)}</td>
@@ -230,11 +230,11 @@ export default function AccuracyPage() {
                 .sort(([,a], [,b]) => b.total - a.total)
                 .map(([regime, s]) => (
                   <tr key={regime}>
-                    <td style={{ ...TD, fontFamily: "monospace", fontSize: ".72em" }}>{regime}</td>
-                    <td style={{ ...TD, color: "#00c896" }}>{s.wins}</td>
-                    <td style={{ ...TD, color: "#ff3d5e" }}>{s.losses}</td>
+                    <td style={{ ...TD, fontFamily: "monospace", fontSize: ".82em" }}>{regime}</td>
+                    <td style={{ ...TD, color: "var(--g)" }}>{s.wins}</td>
+                    <td style={{ ...TD, color: "var(--r)" }}>{s.losses}</td>
                     <td style={TD}>{s.total}</td>
-                    <td style={{ ...TD, fontWeight: 700, color: s.win_rate >= 0.6 ? "#00c896" : s.win_rate < 0.4 ? "#ff3d5e" : "#f59e0b" }}>
+                    <td style={{ ...TD, fontWeight: 700, color: s.win_rate >= 0.6 ? "var(--g)" : s.win_rate < 0.4 ? "var(--r)" : "var(--y)" }}>
                       {(s.win_rate * 100).toFixed(1)}%
                     </td>
                   </tr>
@@ -253,7 +253,7 @@ export default function AccuracyPage() {
               {learning.feature_importance.map(f => {
                 const absMax = Math.max(...learning.feature_importance.map(x => Math.abs(x.importance)))
                 const barW   = absMax > 0 ? Math.abs(f.importance) / absMax * 100 : 0
-                const clr    = f.direction === "positive" ? "#00c896" : "#ff3d5e"
+                const clr    = f.direction === "positive" ? "var(--g)" : "var(--r)"
                 return (
                   <div key={f.feature} style={{ display: "flex", alignItems: "center", gap: 10 }}>
                     <div style={{ width: 160, fontSize: ".76em", color: "var(--txd)", flexShrink: 0 }}>{f.feature}</div>
@@ -263,7 +263,7 @@ export default function AccuracyPage() {
                     <div style={{ width: 60, fontSize: ".76em", fontFamily: "'JetBrains Mono',monospace", color: clr, textAlign: "right" }}>
                       {f.importance > 0 ? "+" : ""}{f.importance.toFixed(3)}
                     </div>
-                    <div style={{ width: 60, fontSize: ".68em", color: "var(--txs)" }}>{f.direction}</div>
+                    <div style={{ width: 60, fontSize: ".78em", color: "var(--txs)" }}>{f.direction}</div>
                   </div>
                 )
               })}
@@ -288,11 +288,11 @@ export default function AccuracyPage() {
                 return (
                   <tr key={i}>
                     <td style={{ ...TD, fontWeight: 800 }}>{t.symbol}</td>
-                    <td style={{ ...TD, fontWeight: 700, color: lng ? "#00c896" : "#ff3d5e" }}>{t.direction.toUpperCase()}</td>
+                    <td style={{ ...TD, fontWeight: 700, color: lng ? "var(--g)" : "var(--r)" }}>{t.direction.toUpperCase()}</td>
                     <td style={TD}>{fmt(t.entry_price)}</td>
                     <td style={TD}>{fmt(t.current_price)}</td>
-                    <td style={{ ...TD, color: "#ff3d5e" }}>{fmt(t.sl_price)}</td>
-                    <td style={{ ...TD, color: "#00c896" }}>{fmt(t.target_price)}</td>
+                    <td style={{ ...TD, color: "var(--r)" }}>{fmt(t.sl_price)}</td>
+                    <td style={{ ...TD, color: "var(--g)" }}>{fmt(t.target_price)}</td>
                     <td style={{ ...TD, color: "var(--txd)" }}>{t.status}</td>
                     <td style={{ ...TD, fontWeight: 700, color: pclr }}>
                       {t.pnl_pct != null ? `${t.pnl_pct >= 0 ? "+" : ""}${fmt(t.pnl_pct,1)}%` : "—"}
@@ -314,20 +314,20 @@ export default function AccuracyPage() {
           {(learning?.recent_changes ?? []).slice().reverse().map((entry, i) => (
             <div key={i} style={{ background: "var(--c1)", border: "1px solid var(--bd)", borderRadius: 8, padding: "10px 14px" }}>
               <div style={{ display: "flex", gap: 10, marginBottom: 6, alignItems: "center" }}>
-                <span style={{ fontSize: ".68em", color: "var(--txs)" }}>
+                <span style={{ fontSize: ".78em", color: "var(--txs)" }}>
                   {entry.ts ? new Date(entry.ts).toLocaleString("en-IN") : ""}
                 </span>
-                <span style={{ fontSize: ".68em", color: "var(--txd)", background: "var(--c2)", padding: "1px 6px", borderRadius: 4 }}>
+                <span style={{ fontSize: ".78em", color: "var(--txd)", background: "var(--c2)", padding: "1px 6px", borderRadius: 4 }}>
                   {entry.n_trades} trades resolved
                 </span>
               </div>
               {Object.entries(entry.changes ?? {}).map(([key, info]) => (
                 <div key={key} style={{ display: "flex", gap: 8, alignItems: "baseline", marginBottom: 4 }}>
-                  <span style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: ".76em", color: "#f59e0b", minWidth: 200 }}>{key}</span>
-                  <span style={{ fontSize: ".76em", color: "#ff3d5e" }}>{info.from}</span>
+                  <span style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: ".76em", color: "var(--y)", minWidth: 200 }}>{key}</span>
+                  <span style={{ fontSize: ".76em", color: "var(--r)" }}>{info.from}</span>
                   <span style={{ fontSize: ".76em", color: "var(--txs)" }}>→</span>
-                  <span style={{ fontSize: ".76em", color: "#00c896" }}>{info.to}</span>
-                  <span style={{ fontSize: ".68em", color: "var(--txs)", marginLeft: 6 }}>{info.reason}</span>
+                  <span style={{ fontSize: ".76em", color: "var(--g)" }}>{info.to}</span>
+                  <span style={{ fontSize: ".78em", color: "var(--txs)", marginLeft: 6 }}>{info.reason}</span>
                 </div>
               ))}
             </div>

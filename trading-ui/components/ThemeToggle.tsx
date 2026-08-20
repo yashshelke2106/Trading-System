@@ -39,9 +39,23 @@ export default function ThemeToggle() {
     setMounted(true)
   }, [])
 
+  // 3. STALE BORDERS — any rule transitioning a colour animates from its
+  //    pre-swap value, and a var() re-point can leave it parked on the old
+  //    theme's colour (see globals.css data-theme-switching). So suspend
+  //    transitions for the frame the swap lands in.
+  //    The forced reflows are load-bearing: all three attribute writes happen
+  //    in one task, so without them the browser would coalesce to the final
+  //    state (new theme, no suspend attribute) and animate anyway.
   function toggle() {
     const next: Theme = current() === "light" ? "dark" : "light"
-    document.documentElement.setAttribute("data-theme", next)
+    const root = document.documentElement
+
+    root.setAttribute("data-theme-switching", "")
+    void root.offsetHeight                  // commit "transitions off"
+    root.setAttribute("data-theme", next)
+    void root.offsetHeight                  // commit new colours, un-animated
+    requestAnimationFrame(() => root.removeAttribute("data-theme-switching"))
+
     try { localStorage.setItem(KEY, next) } catch { /* private mode — session only */ }
     setTheme(next)
   }

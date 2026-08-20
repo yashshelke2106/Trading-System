@@ -20,13 +20,13 @@ const EMPTY_STATS: Stats = {
 const REFRESH_MS = 15_000
 
 function pnlColor(pnl: number): string {
-  return pnl >= 0 ? "#00c896" : "#ff3d5e"
+  return pnl >= 0 ? "var(--g)" : "var(--r)"
 }
 
 function statusColor(status: string): string {
-  if (status === "WIN") return "#00c896"
-  if (status === "LOSS") return "#ff3d5e"
-  if (status === "EXPIRED") return "#f59e0b"
+  if (status === "WIN") return "var(--g)"
+  if (status === "LOSS") return "var(--r)"
+  if (status === "EXPIRED") return "var(--y)"
   return "#6b84a0"
 }
 
@@ -59,7 +59,7 @@ function formatFetchError(error: unknown) {
 const TH: React.CSSProperties = {
   background: "var(--c2)",
   color: "var(--txd)",
-  fontSize: ".66em",
+  fontSize: ".76em",
   fontWeight: 700,
   textTransform: "uppercase",
   letterSpacing: ".08em",
@@ -128,7 +128,7 @@ export default function TradesPage() {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
       <div className="secHdr">
-        <div className="secDot" style={{ background: "#38b2f0" }} />
+        <div className="secDot" style={{ background: "var(--b)" }} />
         <div className="secTitle">Paper P&amp;L - Last 30 Days</div>
       </div>
 
@@ -138,8 +138,8 @@ export default function TradesPage() {
             background: error ? "rgba(245,158,11,.12)" : "rgba(56,178,240,.10)",
             border: `1px solid ${error ? "rgba(245,158,11,.35)" : "rgba(56,178,240,.22)"}`,
             borderRadius: 8,
-            color: error ? "#f59e0b" : "var(--txd)",
-            fontSize: ".74em",
+            color: error ? "var(--y)" : "var(--txd)",
+            fontSize: ".84em",
             padding: "10px 12px",
           }}
         >
@@ -157,13 +157,13 @@ export default function TradesPage() {
           {
             label: "WIN RATE",
             value: `${stats.win_rate}%`,
-            color: stats.win_rate >= 50 ? "#00c896" : "#ff3d5e",
+            color: stats.win_rate >= 50 ? "var(--g)" : "var(--r)",
             sub: `${stats.wins}W / ${stats.losses}L / ${stats.expired}E`,
           },
           { label: "TOTAL P&L", value: `\u20B9${fmt(stats.total_pnl)}`, color: pnlColor(stats.total_pnl) },
           { label: "AVG P&L", value: `\u20B9${fmt(stats.avg_pnl)}`, color: pnlColor(stats.avg_pnl) },
-          { label: "BEST TRADE", value: `\u20B9${fmt(stats.best_trade)}`, color: "#00c896" },
-          { label: "WORST TRADE", value: `\u20B9${fmt(stats.worst_trade)}`, color: "#ff3d5e" },
+          { label: "BEST TRADE", value: `\u20B9${fmt(stats.best_trade)}`, color: "var(--g)" },
+          { label: "WORST TRADE", value: `\u20B9${fmt(stats.worst_trade)}`, color: "var(--r)" },
         ].map(({ label, value, color, sub }) => (
           <div
             key={label}
@@ -176,7 +176,7 @@ export default function TradesPage() {
           >
             <div
               style={{
-                fontSize: ".58em",
+                fontSize: ".70em",
                 fontWeight: 600,
                 textTransform: "uppercase",
                 letterSpacing: ".1em",
@@ -197,7 +197,7 @@ export default function TradesPage() {
               {value}
             </div>
             {sub && (
-              <div style={{ fontSize: ".65em", color: "var(--txd)", marginTop: 2 }}>{sub}</div>
+              <div style={{ fontSize: ".74em", color: "var(--txd)", marginTop: 2 }}>{sub}</div>
             )}
           </div>
         ))}
@@ -240,7 +240,7 @@ export default function TradesPage() {
                     {t.timestamp ? new Date(t.timestamp).toLocaleDateString("en-IN") : "-"}
                   </td>
                   <td style={{ ...TD, fontWeight: 800, color: "var(--tx)" }}>{t.symbol}</td>
-                  <td style={{ ...TD, fontWeight: 700, color: isLong ? "#00c896" : "#ff3d5e" }}>
+                  <td style={{ ...TD, fontWeight: 700, color: isLong ? "var(--g)" : "var(--r)" }}>
                     {t.direction}
                   </td>
                   <td style={{ ...TD, fontWeight: 700, color: statusColor(t.status) }}>{t.status}</td>

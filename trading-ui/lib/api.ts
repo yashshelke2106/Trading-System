@@ -1,16 +1,29 @@
 const BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000"
 
+// Must EXCEED the server's own _RUN_DEADLINE_SEC (12s), or the browser gives
+// up before the API can answer and every slow-but-alive endpoint looks dead.
+// At 8s that was guaranteed: the server returns a structured timeout at 12s,
+// so the client aborted first — 100% of the time — and reported "is the
+// backend running?" while it was running and answering fine.
+const API_TIMEOUT_MS = 15_000
+
 async function apiFetch(path: string) {
-  // 8s timeout: a wedged/dead API must FAIL VISIBLY, not hang pages forever
   const ctl = new AbortController()
-  const timer = setTimeout(() => ctl.abort(), 8000)
+  const timer = setTimeout(() => ctl.abort(), API_TIMEOUT_MS)
   try {
     const res = await fetch(`${BASE}${path}`, { cache: "no-store", signal: ctl.signal })
     if (!res.ok) throw new Error(`${path} fetch failed: ${res.status}`)
     return await res.json()
   } catch (e) {
+    // A timeout and a refused connection are different faults with different
+    // fixes. Collapsing both into "is the backend running?" sent us hunting a
+    // dead server that was up the whole time.
     if ((e as Error).name === "AbortError")
-      throw new Error(`API not responding at ${BASE} — is the backend running? (.\\start_ui.bat)`)
+      throw new Error(
+        `${path} timed out after ${API_TIMEOUT_MS / 1000}s — the API is up but this `
+        + `endpoint is slow (usually Dhan rate-limited). It retries automatically.`)
+    if (e instanceof TypeError)   // fetch throws TypeError when it cannot connect
+      throw new Error(`Cannot reach the API at ${BASE} — is the backend running? (.\\start_ui.bat)`)
     throw e
   } finally {
     clearTimeout(timer)

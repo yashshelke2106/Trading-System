@@ -74,25 +74,36 @@ html[data-theme="light"] {
   --bdh:  #b9c5d8;
   --bda:  #2f7fd0;
 
-  --tx:   #101826;
-  --txm:  #3d4c63;
-  --txd:  #5d6d85;
-  --txs:  #8494a9;
+  /* Muted ramp re-derived 2026-08-15. --txs was #8494a9, which scores only
+     2.9:1 on the page and 3.1:1 on a card — it FAILED AA the moment the theme
+     went light, and it is what small labels like the P&L card captions use.
+     Every tier below now clears 4.5:1 on page (#f4f6fa), card (#fff) AND
+     raised (#eef1f7). Do not lighten these again. */
+  --tx:   #101826;   /* primary   16.4:1 */
+  --txm:  #3d4c63;   /* secondary  8.1:1 */
+  --txd:  #4d5d75;   /* muted      6.2:1 */
+  --txs:  #5d6d85;   /* faint      4.9:1 */
 
   /* Darker accents: the dark-theme neons fail contrast on white. */
   /* Contrast-checked against both light surfaces (#fff card, #f4f6fa page):
      the dark theme's #1fdd9a scores 1.7 and the first pick #0a9d63 only 3.49,
      both under the 4.5 AA floor. #077a4b lands at 5.39 / 4.98. */
-  --g:    #077a4b;  --gd: #05603a;
-  --r:    #d92b45;  --rd: #a81f34;
-  --y:    #b07d05;
-  --o:    #c46a10;
-  --b:    #1668c7;
-  --p:    #6d4de0;
+  /* Re-solved 2026-08-15: the values above were checked against WHITE only.
+     Cards and table rows sit on --c2 (#eef1f7) and --c3 (#e3e8f1), where four
+     of the five dropped under AA — amber worst at 2.95:1. These clear >=4.6:1
+     on the DARKEST surface, so they are safe on every background, and they
+     match the Streamlit palette exactly so both terminals read as one product.
+     Do not lighten these back toward the dark-theme neons. */
+  --g:    #077548;  --gd: #05603a;
+  --r:    #c3273e;  --rd: #a81f34;
+  --y:    #865f04;
+  --o:    #a4560d;
+  --b:    #1564bf;
+  --p:    #6b4bdc;
 
-  --ok:   #077a4b;
-  --bad:  #d92b45;
-  --warn: #b07d05;
+  --ok:   #077548;
+  --bad:  #c3273e;
+  --warn: #865f04;
 
   --sh-1: 0 1px 2px rgba(16,24,38,.08);
   --sh-2: 0 6px 20px -8px rgba(16,24,38,.18);
@@ -100,6 +111,22 @@ html[data-theme="light"] {
 
   --background: #f4f6fa;
   --foreground: #101826;
+}
+
+/* ── Theme swap must not be animated ──
+   A swap re-points variables instead of changing which rules match, and a
+   transition animates FROM the pre-swap value: Chrome can settle a border on
+   the OLD theme's colour and leave it there until something else repaints the
+   element. Measured 2026-08-11 — a .btn reported the light --bd
+   rgb(216,223,234) while html[data-theme="dark"] was set and
+   getComputedStyle(<html>) correctly read --bd: #1c2a44.
+   ThemeToggle stamps data-theme-switching around the flip so every element
+   repaints straight to the new value. Hover animations keep their transitions;
+   they are only suspended for the one frame the swap lands in. */
+html[data-theme-switching] *,
+html[data-theme-switching] *::before,
+html[data-theme-switching] *::after {
+  transition: none !important;
 }
 
 @theme inline {
@@ -120,8 +147,8 @@ body {
   background-attachment: fixed;
   color: var(--tx);
   font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Inter, sans-serif;
-  font-size: 13px;
-  line-height: 1.5;
+  font-size: 15px;
+  line-height: 1.55;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
 }
@@ -172,7 +199,7 @@ a { color: inherit; text-decoration: none; }
 .appBar {
   max-width: 1680px; margin: 0 auto;
   display: flex; align-items: center; justify-content: space-between;
-  gap: 18px; padding: 11px 28px 0;
+  gap: 20px; padding: 13px 32px 0;
 }
 .brand { display: flex; align-items: baseline; gap: 10px; }
 .brandMark {
@@ -182,27 +209,27 @@ a { color: inherit; text-decoration: none; }
   transform: translateY(2px);
 }
 .appName {
-  font-size: 13px; font-weight: 800; letter-spacing: .16em;
+  font-size: 15px; font-weight: 800; letter-spacing: .16em;
   text-transform: uppercase; color: var(--tx);
 }
 .appTag {
-  font-size: 9.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .12em;
+  font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .12em;
   color: var(--b); border: 1px solid color-mix(in srgb, var(--b) 45%, transparent);
   background: color-mix(in srgb, var(--b) 12%, transparent);
   padding: 3px 8px; border-radius: 999px; margin-left: 4px;
 }
 
-.container { max-width: 1680px; margin: 0 auto; padding: 18px 28px 40px; }
+.container { max-width: 1720px; margin: 0 auto; padding: 22px 32px 48px; }
 .viewEnter { animation: rise .28s var(--ease) both; }
 
 /* ── Nav ── */
 .navWrap {
   max-width: 1680px; margin: 0 auto;
-  display: flex; gap: 2px; padding: 4px 22px 0; overflow-x: auto;
+  display: flex; gap: 2px; padding: 5px 26px 0; overflow-x: auto;
 }
 .navTab {
   position: relative;
-  font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .07em;
+  font-size: 12.5px; font-weight: 600; text-transform: uppercase; letter-spacing: .07em;
   padding: 11px 15px 13px; color: var(--txd); white-space: nowrap;
   transition: color .16s var(--ease);
 }
@@ -226,7 +253,7 @@ a { color: inherit; text-decoration: none; }
 }
 .btn {
   display: inline-flex; align-items: center; gap: 6px;
-  font-size: 11px; font-weight: 700; letter-spacing: .04em;
+  font-size: 12.5px; font-weight: 700; letter-spacing: .04em;
   padding: 7px 13px; border-radius: var(--r-sm);
   border: 1px solid var(--bd); background: var(--c2); color: var(--tx);
   cursor: pointer; transition: border-color .15s, background .15s, transform .05s;
@@ -237,7 +264,7 @@ a { color: inherit; text-decoration: none; }
 
 .pill {
   display: inline-flex; align-items: center; gap: 5px;
-  font-size: 10px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase;
+  font-size: 11.5px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase;
   padding: 2px 8px; border-radius: 999px;
   border: 1px solid var(--bd); background: var(--c2); color: var(--txm);
 }
@@ -249,7 +276,7 @@ a { color: inherit; text-decoration: none; }
 /* ── Badges (legacy names) ── */
 .bLive, .bModel, .bStale {
   display: inline-flex; align-items: center; gap: 4px;
-  font-size: 9.5px; font-weight: 800; letter-spacing: .09em;
+  font-size: 11px; font-weight: 800; letter-spacing: .09em;
   padding: 2px 7px; border-radius: 999px; text-transform: uppercase; vertical-align: middle;
 }
 .bLive  { background: color-mix(in srgb, var(--g) 12%, transparent); color: var(--g); border: 1px solid color-mix(in srgb, var(--g) 34%, transparent); }
@@ -275,18 +302,18 @@ a { color: inherit; text-decoration: none; }
 .sCard:hover { border-color: var(--bdh); box-shadow: var(--sh-3); transform: translateY(-2px); }
 
 .sHdr { display:flex; align-items:center; justify-content:space-between; padding: 12px 16px 10px; border-bottom: 1px solid var(--bd); }
-.sSym { font-size: 16px; font-weight: 800; letter-spacing: .01em; }
-.sGrade { font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: .09em; padding: 3px 10px; border-radius: 999px; }
+.sSym { font-size: 18.5px; font-weight: 800; letter-spacing: .01em; }
+.sGrade { font-size: 11.5px; font-weight: 800; text-transform: uppercase; letter-spacing: .09em; padding: 3px 10px; border-radius: 999px; }
 
 .sPrices { display:grid; grid-template-columns: repeat(4,1fr); padding: 12px 16px; border-bottom: 1px solid var(--bd); }
 .sPCol { padding: 0 14px 0 0; }
 .sPCol + .sPCol { padding-left: 14px; border-left: 1px solid var(--bd); }
-.sLbl { font-size: 9.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .11em; color: var(--txd); margin-bottom: 4px; }
-.sVal { font-size: 14px; font-weight: 700; font-family: var(--font-mono); }
-.sMeta { padding: 9px 16px; font-size: 11px; color: var(--txm); border-bottom: 1px solid var(--bd); }
-.sReason { padding: 9px 16px 11px; font-size: 11px; color: var(--txd); line-height: 1.55; }
+.sLbl { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .11em; color: var(--txd); margin-bottom: 4px; }
+.sVal { font-size: 16px; font-weight: 700; font-family: var(--font-mono); }
+.sMeta { padding: 9px 16px; font-size: 12.5px; color: var(--txm); border-bottom: 1px solid var(--bd); }
+.sReason { padding: 9px 16px 11px; font-size: 12.5px; color: var(--txd); line-height: 1.55; }
 .sOpt { padding: 11px 16px; background: var(--c2); border-top: 1px solid var(--bd); }
-.sOptHdr { display:flex; align-items:center; gap:7px; margin-bottom: 10px; font-size: 11.5px; font-weight: 700; flex-wrap: wrap; }
+.sOptHdr { display:flex; align-items:center; gap:7px; margin-bottom: 10px; font-size: 13.5px; font-weight: 700; flex-wrap: wrap; }
 .sOptGrid { display:grid; grid-template-columns: repeat(4,1fr); gap: 10px; }
 .sOptCell { text-align:center; }
 
@@ -299,16 +326,16 @@ a { color: inherit; text-decoration: none; }
   border:1px solid var(--bd); border-radius: var(--r-lg); overflow:hidden;
   box-shadow: var(--sh-1);
 }
-.statItem { flex:1; min-width: 104px; padding: 11px 16px; border-right:1px solid var(--bd); transition: background .15s; }
+.statItem { flex:1; min-width: 118px; padding: 13px 18px; border-right:1px solid var(--bd); transition: background .15s; }
 .statItem:last-child { border-right:none; }
 .statItem:hover { background: var(--c2); }
-.statLbl { font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: .12em; color: var(--txd); margin-bottom: 5px; }
-.statVal { font-size: 14px; font-weight: 800; color: var(--tx); font-family: var(--font-mono); }
+.statLbl { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .12em; color: var(--txd); margin-bottom: 5px; }
+.statVal { font-size: 16px; font-weight: 800; color: var(--tx); font-family: var(--font-mono); }
 
 /* ── Section header ── */
 .secHdr { display:flex; align-items:center; gap:9px; margin: 4px 0 14px; padding-bottom: 9px; border-bottom: 1px solid var(--bd); }
 .secDot { width:3px; height:15px; border-radius:2px; flex-shrink:0; background: var(--b); }
-.secTitle { font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: .13em; color: var(--txm); }
+.secTitle { font-size: 12.5px; font-weight: 800; text-transform: uppercase; letter-spacing: .13em; color: var(--txm); }
 
 /* legacy app title (kept for any page still using it) */
 .appTitle { display:flex; align-items:center; justify-content:space-between; padding: 10px 0 12px; border-bottom: 1px solid var(--bd); margin-bottom: 14px; }
@@ -322,29 +349,29 @@ a { color: inherit; text-decoration: none; }
 }
 .ixItem { flex:1; min-width: 138px; padding: 9px 18px; border-right:1px solid var(--bd); }
 .ixItem:last-child { border-right:none; }
-.ixLbl { font-size: 9px; font-weight: 800; text-transform: uppercase; letter-spacing: .13em; color: var(--txd); margin-bottom: 4px; }
-.ixVal { font-size: 15px; font-weight: 800; font-family: var(--font-mono); }
-.ixChg { font-size: 11px; font-weight: 700; font-family: var(--font-mono); margin-left: 8px; }
-.ixTs  { font-size: 9.5px; color: var(--txs); margin-left: auto; padding: 9px 16px; }
+.ixLbl { font-size: 10.5px; font-weight: 800; text-transform: uppercase; letter-spacing: .13em; color: var(--txd); margin-bottom: 4px; }
+.ixVal { font-size: 17.5px; font-weight: 800; font-family: var(--font-mono); }
+.ixChg { font-size: 12.5px; font-weight: 700; font-family: var(--font-mono); margin-left: 8px; }
+.ixTs  { font-size: 11px; color: var(--txs); margin-left: auto; padding: 9px 16px; }
 
 /* ── Tabs (grade tabs on home — class hooks if adopted) ── */
 .tabRow { display:flex; gap:2px; border-bottom: 1px solid var(--bd); }
 .tabBtn {
   padding: 9px 18px; border:none; background:transparent; cursor:pointer;
-  font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: .07em;
+  font-size: 12.5px; font-weight: 800; text-transform: uppercase; letter-spacing: .07em;
   color: var(--txd); border-bottom: 2px solid transparent; transition: color .15s;
 }
 .tabBtn:hover { color: var(--tx); }
 .tabBtn.on { color: var(--b); border-bottom-color: var(--b); }
 
 /* ── Table ── */
-table.t { width:100%; border-collapse: collapse; font-size: 12px; }
+table.t { width:100%; border-collapse: collapse; font-size: 14px; }
 table.t th {
-  text-align:left; font-size: 9.5px; font-weight:800; text-transform:uppercase;
-  letter-spacing:.1em; color: var(--txd); padding: 9px 12px; border-bottom: 1px solid var(--bd);
+  text-align:left; font-size: 11px; font-weight:800; text-transform:uppercase;
+  letter-spacing:.1em; color: var(--txd); padding: 11px 14px; border-bottom: 1px solid var(--bd);
   position: sticky; top: 0; background: var(--c1);
 }
-table.t td { padding: 9px 12px; border-bottom: 1px solid color-mix(in srgb, var(--bd) 60%, transparent); }
+table.t td { padding: 11px 14px; border-bottom: 1px solid color-mix(in srgb, var(--bd) 60%, transparent); }
 table.t tbody tr { transition: background .12s; }
 table.t tbody tr:hover { background: var(--c2); }
 
@@ -386,9 +413,9 @@ table.t tbody tr:hover { background: var(--c2); }
   background: color-mix(in srgb, var(--b) 14%, transparent);
   border-color: color-mix(in srgb, var(--b) 45%, transparent);
 }
-.sectionLabel { font-size: 14px; font-weight: 700; letter-spacing: .01em; }
+.sectionLabel { font-size: 16px; font-weight: 700; letter-spacing: .01em; }
 .sectionBlurb {
-  font-size: 9px; font-weight: 600; text-transform: uppercase;
+  font-size: 10.5px; font-weight: 600; text-transform: uppercase;
   letter-spacing: .09em; color: var(--txs);
 }
 .sectionTab.active .sectionBlurb { color: var(--b); }
@@ -396,7 +423,7 @@ table.t tbody tr:hover { background: var(--c2); }
 @media (max-width: 720px) {
   .appBar { flex-wrap: wrap; row-gap: 8px; }
   .sectionNav { margin-left: 0; width: 100%; }
-  .sectionLabel { font-size: 13px; }
+  .sectionLabel { font-size: 15px; }
 }
 
 /* ── Theme toggle ── */
@@ -404,7 +431,7 @@ table.t tbody tr:hover { background: var(--c2); }
   flex: 0 0 auto;
   width: 32px; height: 32px; border-radius: 8px;
   display: inline-flex; align-items: center; justify-content: center;
-  font-size: 14px; line-height: 1;
+  font-size: 16px; line-height: 1;
   color: var(--txd);
   background: var(--c2);
   border: 1px solid var(--bd);

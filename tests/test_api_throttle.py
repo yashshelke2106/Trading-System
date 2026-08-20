@@ -49,3 +49,26 @@ def test_shared_backoff_corrupt_file_is_zero(tmp_path, monkeypatch):
     monkeypatch.setattr(ad, "_BACKOFF_FILE", str(p))
     _force_reread()
     assert ad._shared_backoff_get("oc") == 0.0
+
+
+def test_chart_throttle_reserves_slot_under_shared_lock(monkeypatch):
+    """Worker-thread scans must not race past the chart-rate timestamp."""
+    events = []
+
+    class ProbeLock:
+        def __enter__(self):
+            events.append("entered")
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            events.append("exited")
+
+    monkeypatch.setattr(ad.DhanAPI, "_chart_lock", ProbeLock())
+    monkeypatch.setattr(ad.DhanAPI, "_CHART_RATE_LIMIT", 0.0)
+    monkeypatch.setattr(ad.DhanAPI, "_chart_last_call", 0.0)
+    monkeypatch.setattr(ad, "_shared_backoff_get", lambda kind: 0.0)
+
+    api = object.__new__(ad.DhanAPI)
+    api._throttle_chart("/charts/historical")
+
+    assert events == ["entered", "exited"]

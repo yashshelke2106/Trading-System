@@ -1,8 +1,17 @@
 """Atomic JSON writer for logs/signals.json — shared between scanner and Streamlit.
 
-Signals persist for SIGNAL_TTL_SEC after FIRST discovery. Once they age out,
-they're removed even if the scanner keeps re-detecting them. This prevents
-"sticky signal" bug where same trades show all day.
+RETENTION (changed 2026-08-14 — reported: "trades disappear from the dashboard
+before they hit target or stoploss"):
+
+An UNRESOLVED trade is never aged out. SIGNAL_TTL_SEC used to drop every signal
+15 minutes after first discovery no matter what it was doing, so a position you
+were actively watching vanished from the terminal while it was still live —
+there was no way to see how it ended. A signal now survives while the journal
+still lists it as open, and leaves only when the tracker resolves it
+(TARGET_HIT / SL_HIT / EXPIRED) or it exceeds the runaway cap below.
+
+The old TTL still applies to signals the journal is NOT tracking, which keeps
+the original "sticky signal" fix intact for untracked chatter.
 """
 import json
 import os
@@ -13,8 +22,25 @@ SIGNALS_FILE = os.path.join(_BASE, "logs", "signals.json")
 SIGNALS_PATH = SIGNALS_FILE
 HISTORY_FILE = os.path.join(_BASE, "logs", "signals_history.jsonl")
 
-SIGNAL_TTL_SEC = 900        # signals expire 15 min after FIRST discovery
+SIGNAL_TTL_SEC = 900        # untracked signals expire 15 min after discovery
 RE_ENTRY_COOLDOWN_SEC = 600   # 10 min before same symbol can re-signal
+# Safety valve: if the tracker stops resolving (crashed, no price feed), an
+# open signal must not wedge the feed forever. Generous enough that a genuine
+# multi-day hold is never cut short.
+MAX_OPEN_AGE_SEC = 3 * 24 * 3600
+
+
+def _open_keys() -> set:
+    """(symbol, direction) the journal still considers unresolved.
+
+    Empty set on any failure, which degrades to the old age-only behaviour
+    rather than pinning signals on screen forever.
+    """
+    try:
+        from core.signal_journal import get_open_signals
+        return {(r.get("symbol"), r.get("direction")) for r in get_open_signals()}
+    except Exception:
+        return set()
 
 
 def _merge_with_existing(new_signals: list) -> list:
@@ -47,13 +73,21 @@ def _merge_with_existing(new_signals: list) -> list:
     # system restart, NOT "just expired". Otherwise every restart blocks
     # yesterday's symbols for 10 min for no reason.
     STALE_GAP_SEC = 3600   # >1h old = stale, drop silently
+    open_keys = _open_keys()
     for sig in existing:
         sym = sig.get("symbol", "")
         first_ts = sig.get("first_seen_ts") or sig.get("ts", "")
         try:
             first_time = datetime.fromisoformat(first_ts)
             age_sec = (now - first_time).total_seconds()
-            if age_sec <= SIGNAL_TTL_SEC:
+            # An unresolved trade outranks the clock: keep it until the tracker
+            # says TARGET_HIT / SL_HIT / EXPIRED. Dropping a live position at
+            # 15 minutes is what made trades vanish mid-flight.
+            still_open = (sym, sig.get("direction")) in open_keys
+            if still_open and age_sec <= MAX_OPEN_AGE_SEC:
+                sig["open"] = True
+                merged[sym] = sig
+            elif not still_open and age_sec <= SIGNAL_TTL_SEC:
                 merged[sym] = sig
             elif age_sec < STALE_GAP_SEC:
                 # Recently expired — apply cooldown so we don't re-signal immediately
@@ -127,6 +161,23 @@ def write_signals(signals: list, meta: dict = None) -> None:
     except Exception:
         pass
 
+    # Journal at the WRITE boundary, not in the callers. scan_only_v2 records
+    # its signals but core/agents/signal_agent.py (the other writer, started
+    # unconditionally by aladdin_runner) had zero record_signal calls — so
+    # everything it produced was untracked and could never be resolved to
+    # TARGET_HIT/SL_HIT at all. Journaling here covers every writer at once.
+    # record_signal dedupes on (symbol, direction, date), so the 30s scan loop
+    # re-recording the same signal is a no-op that returns the existing id.
+    try:
+        from core.signal_journal import record_signal
+        for s in signals:
+            try:
+                s["signal_id"] = record_signal(s)
+            except Exception:
+                pass          # journaling must never block the write
+    except Exception:
+        pass
+
     all_signals = _merge_with_existing(signals)
     cooldown = getattr(_merge_with_existing, "_last_cooldown", {})
 
@@ -145,12 +196,30 @@ def write_signals(signals: list, meta: dict = None) -> None:
         "signals": all_signals,
         "_cooldown": cooldown,   # symbol -> unix ts when cooldown ends
     }
-    tmp = SIGNALS_FILE + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(payload, f, indent=2, default=str)
-        f.flush()
-        os.fsync(f.fileno())
-    os.replace(tmp, SIGNALS_FILE)
+    # PER-PROCESS staging file. The tmp path used to be shared, and
+    # start_trading.bat runs TWO writers concurrently: scan_only_v2 and
+    # aladdin_runner's SignalAgent (started unconditionally at
+    # aladdin_runner.py:541 — `--no-scan` only disables its other writer).
+    # Both opened "signals.json.tmp" with mode "w", so the shorter payload
+    # truncated the longer one mid-flight and os.replace published a valid
+    # JSON document with a foreign tail glued on. Observed 2026-08-11: a
+    # 5,772-byte file whose document ended at char 3701. Every reader
+    # swallows the parse error and returns empty, so the whole UI just went
+    # blank with no error anywhere. os.replace stays atomic; last writer
+    # simply wins with a COMPLETE document.
+    tmp = f"{SIGNALS_FILE}.{os.getpid()}.tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2, default=str)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, SIGNALS_FILE)
+    finally:
+        if os.path.exists(tmp):
+            try:
+                os.remove(tmp)          # crashed mid-write: don't leak staging files
+            except OSError:
+                pass
 
     if signals:
         with open(HISTORY_FILE, "a", encoding="utf-8") as f:

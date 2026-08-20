@@ -22,17 +22,17 @@ export default function MarketStatusBar() {
   if (!status) return null
 
   const mktClr: Record<string, string> = {
-    LIVE: "#00c896", CLOSED: "#3a4f66", "PRE-MKT": "#f59e0b", WEEKEND: "#3a4f66",
+    LIVE: "var(--g)", CLOSED: "#3a4f66", "PRE-MKT": "var(--y)", WEEKEND: "#3a4f66",
   }
   const clr = mktClr[status.market_status] ?? "#6b84a0"
   const isLive = status.market_status === "LIVE"
 
   const th = status.trade_token
-  const tokClr = th.valid && !th.needs_refresh ? "#00c896" : (th.valid ? "#f59e0b" : "#ff3d5e")
+  const tokClr = th.valid && !th.needs_refresh ? "var(--g)" : (th.valid ? "var(--y)" : "var(--r)")
   const tokIcon = th.valid && !th.needs_refresh ? "✓" : (th.valid ? "⚠" : "✗")
   const tokLbl = th.hours_left != null ? `${tokIcon} ${th.hours_left.toFixed(0)}h` : `${tokIcon} —`
 
-  const daClr = status.data_api.valid ? "#00c896" : "#f59e0b"
+  const daClr = status.data_api.valid ? "var(--g)" : "var(--y)"
 
   return (
     <div className="statBar" style={{ marginBottom: 0, borderRadius: 0, border: "none", borderBottom: "1px solid var(--bd)" }}>

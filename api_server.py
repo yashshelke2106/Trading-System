@@ -908,7 +908,17 @@ def _dhan_probe() -> Dict[str, Any]:
 
 
 # Last known probe result, kept so the UI is never blanked by one bad call.
-_PROBE: Dict[str, Any] = {"result": None, "at": 0.0, "inflight": False}
+_PROBE: Dict[str, Any] = {"result": None, "at": 0.0, "inflight": False,
+                          # Last verdict that actually reached Dhan and got a
+                          # 200, kept separately from `result`. A transient
+                          # answer (429/timeout/5xx) overwrote `result` and so
+                          # ERASED a perfectly good verdict: the panel flipped
+                          # to "RATE LIMITED / not working" while the token was
+                          # valid and the scanner was happily using the very
+                          # quota that caused the 429. Keeping the good answer
+                          # separately lets a blip degrade the panel instead of
+                          # contradicting it.
+                          "good": None, "good_at": 0.0}
 _PROBE_LOCK = threading.Lock()
 
 # A working probe is good for a while. A 401 is a real answer, so re-check
@@ -928,6 +938,34 @@ def _ttl_for(result: Dict[str, Any]) -> float:
     return _TTL_TERMINAL
 
 
+def _with_last_good(res: Dict[str, Any]) -> Dict[str, Any]:
+    """Stop a transient answer from contradicting a recent successful probe.
+
+    429 / timeout / Dhan 5xx say nothing about the credentials. If Dhan
+    answered 200 within the last _TTL_OK, that verdict is still the best
+    evidence available, so report it and attach the transient condition as
+    `degraded`. The panel then reads "working, currently throttled" instead
+    of flipping to "not working" because the scanner was using the quota.
+
+    Bounded on purpose: once the good verdict ages past _TTL_OK it stops being
+    served, so a genuinely dead connection cannot hide behind it forever.
+    """
+    if not res.get("transient"):
+        return res
+    with _PROBE_LOCK:
+        good, at = _PROBE["good"], _PROBE["good_at"]
+    if not good or (time.monotonic() - at) >= _TTL_OK:
+        return res
+    return {**good,
+            "configured": _dhan_configured(),   # local read, always current
+            "working": True,
+            "degraded": res.get("status"),
+            "degraded_message": res.get("message"),
+            "retry_after": res.get("retry_after"),
+            "good_age_sec": round(time.monotonic() - at),
+            "refreshing": True}
+
+
 def _probe_now() -> Dict[str, Any]:
     """Run the probe and store it, guarding against duplicate concurrent runs."""
     try:
@@ -938,6 +976,9 @@ def _probe_now() -> Dict[str, Any]:
     with _PROBE_LOCK:
         _PROBE["result"] = res
         _PROBE["at"] = time.monotonic()
+        if res.get("working"):
+            _PROBE["good"] = res
+            _PROBE["good_at"] = time.monotonic()
         _PROBE["inflight"] = False
     return res
 
@@ -959,26 +1000,33 @@ def _dhan_probe_cached(refresh: bool = False) -> Dict[str, Any]:
     in fact live. A first load now reports "checking" (a transient state) and
     the answer arrives on the next poll a couple of seconds later.
     """
+    # _PROBE_LOCK is a plain Lock, so NOTHING inside this block may call
+    # _with_last_good — it takes the same lock and would deadlock the request
+    # thread. Decide under the lock, then build the response outside it.
     with _PROBE_LOCK:
         cached = _PROBE["result"]
         age = time.monotonic() - _PROBE["at"] if cached else None
         fresh = cached is not None and age < _ttl_for(cached)
-        if cached and fresh and not refresh:
-            return {**cached, "age_sec": round(age), "stale": False}
+        serve_fresh = bool(cached and fresh and not refresh)
         already = _PROBE["inflight"]
-        if not already:
+        if not serve_fresh and not already:
             _PROBE["inflight"] = True
+
+    if serve_fresh:
+        return _with_last_good({**cached, "age_sec": round(age),
+                                "stale": False})
 
     if not already:
         threading.Thread(target=_probe_now, daemon=True,
                          name="dhan-probe").start()
 
     if cached is None:
-        return {"configured": _dhan_configured(), "working": False,
-                "status": "checking", "transient": True, "refreshing": True,
-                "message": "checking the Dhan connection…"}
-    return {**cached, "age_sec": round(age), "stale": True,
-            "refreshing": True}
+        return _with_last_good(
+            {"configured": _dhan_configured(), "working": False,
+             "status": "checking", "transient": True, "refreshing": True,
+             "message": "checking the Dhan connection…"})
+    return _with_last_good({**cached, "age_sec": round(age), "stale": True,
+                            "refreshing": True})
 
 
 @app.get("/api/dhan-live-status")
@@ -1551,6 +1599,11 @@ def _invalidate_probe() -> None:
     with _PROBE_LOCK:
         _PROBE["result"] = None
         _PROBE["at"] = 0.0
+        # The last-good verdict belonged to the OLD credentials. Keeping it
+        # would let a rate-limited probe report the previous token as working
+        # after it had been replaced.
+        _PROBE["good"] = None
+        _PROBE["good_at"] = 0.0
     _CACHE.pop("dhanlive", None)
     threading.Thread(target=_probe_now, daemon=True,
                      name="dhan-probe-after-save").start()

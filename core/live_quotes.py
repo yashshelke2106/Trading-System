@@ -63,7 +63,9 @@ _NSE_INDEX_MAP = {
     "NIFTY 50": "NIFTY",
     "NIFTY BANK": "BANKNIFTY",
     "NIFTY MIDCAP 100": "MIDCAP100",
-    "NIFTY FIN SERVICE": "FINNIFTY",
+    # NSE renamed this one; the old "NIFTY FIN SERVICE" key matched nothing,
+    # so FINNIFTY silently never appeared in the live index set.
+    "NIFTY FINANCIAL SERVICES": "FINNIFTY",
     "INDIA VIX": "INDIAVIX",
 }
 _YF_INDEX = {

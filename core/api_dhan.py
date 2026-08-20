@@ -1,6 +1,7 @@
 import logging
 import os
 import ssl
+import threading
 
 # Global SSL bypass — corporate proxy/antivirus intercepts certs.
 # Force every requests.Session call + stdlib ssl to skip verify.
@@ -445,6 +446,11 @@ class DhanAPI:
                                    # tighter than docs suggest (4.5/sec triggered
                                    # 429s on half of calls); 1/sec stays clean
     _chart_backoff_until = 0.0     # extended by the 429 handler in _request
+    # scan_universe fans out to 8 worker threads. Without a lock, all 8 read the
+    # same _chart_last_call, all see "enough elapsed", and fire together — an
+    # 8-wide burst that blew the 1/sec pace and 429'd the whole scan. This lock
+    # serializes the pace so the 8 threads collectively stay at 1 req/sec.
+    _chart_lock = threading.Lock()
 
     def __init__(self):
         # Prefer keyring/saved value over config to allow runtime client_id swap.
@@ -540,16 +546,22 @@ class DhanAPI:
         if "/charts/" not in endpoint:
             return
         import time as _t
-        now = _t.time()
-        # Honor BOTH the process-local and the cross-process shared backoff.
-        until = max(DhanAPI._chart_backoff_until, _shared_backoff_get("chart"))
-        if now < until:
-            _t.sleep(until - now)
+        # `scan_universe` fans requests out to worker threads. Reserve the
+        # next chart slot while holding the shared lock; otherwise every
+        # worker can see the same old timestamp and send an immediate burst.
+        # The lock is deliberately released before the network call so a slow
+        # response does not serialize the entire scan, only request starts.
+        with DhanAPI._chart_lock:
             now = _t.time()
-        elapsed = now - DhanAPI._chart_last_call
-        if elapsed < DhanAPI._CHART_RATE_LIMIT:
-            _t.sleep(DhanAPI._CHART_RATE_LIMIT - elapsed)
-        DhanAPI._chart_last_call = _t.time()
+            # Honor BOTH the process-local and the cross-process shared backoff.
+            until = max(DhanAPI._chart_backoff_until, _shared_backoff_get("chart"))
+            if now < until:
+                _t.sleep(until - now)
+                now = _t.time()
+            elapsed = now - DhanAPI._chart_last_call
+            if elapsed < DhanAPI._CHART_RATE_LIMIT:
+                _t.sleep(DhanAPI._CHART_RATE_LIMIT - elapsed)
+            DhanAPI._chart_last_call = _t.time()
 
     def _request(self, method: str, endpoint: str, data: dict = None,
                  _retry: bool = True, _use_data_session: bool = False) -> dict:

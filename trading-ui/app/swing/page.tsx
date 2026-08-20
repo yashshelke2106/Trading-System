@@ -9,7 +9,7 @@ function fmt(n: number | null | undefined, dec = 2) {
 
 const TH: React.CSSProperties = {
   background: "var(--c2)", color: "var(--txd)",
-  fontSize: ".66em", fontWeight: 700, textTransform: "uppercase",
+  fontSize: ".76em", fontWeight: 700, textTransform: "uppercase",
   letterSpacing: ".08em", padding: "8px 10px",
   borderBottom: "1px solid var(--bdh)", whiteSpace: "nowrap", textAlign: "left",
 }
@@ -23,7 +23,7 @@ const CARD: React.CSSProperties = {
   borderRadius: 8, padding: "10px 14px",
 }
 const LBL: React.CSSProperties = {
-  fontSize: ".58em", fontWeight: 600, textTransform: "uppercase",
+  fontSize: ".70em", fontWeight: 600, textTransform: "uppercase",
   letterSpacing: ".1em", color: "var(--txs)", marginBottom: 3,
 }
 const VAL: React.CSSProperties = {
@@ -54,7 +54,7 @@ interface SwingData {
 }
 
 const HEALTH_CLR: Record<string, string> = {
-  HEALTHY: "#00c896", WARN: "#f59e0b", RETIRED: "#ff3d5e", COLLECTING: "var(--txd)",
+  HEALTHY: "var(--g)", WARN: "var(--y)", RETIRED: "var(--r)", COLLECTING: "var(--txd)",
 }
 
 export default function SwingPage() {
@@ -92,35 +92,35 @@ export default function SwingPage() {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
       <div className="secHdr">
-        <div className="secDot" style={{ background: "#00c896" }} />
+        <div className="secDot" style={{ background: "var(--g)" }} />
         <div className="secTitle">Swing Framework · symmetric 7-gate + learner (no API keys)</div>
       </div>
       {fetchErr && (
         <div style={{
-          background: "rgba(255,61,94,.08)", border: "1px solid #ff3d5e", borderRadius: 8,
-          padding: "10px 14px", fontSize: ".8em", color: "#ff3d5e", fontWeight: 600,
+          background: "rgba(255,61,94,.08)", border: "1px solid var(--r)", borderRadius: 8,
+          padding: "10px 14px", fontSize: ".8em", color: "var(--r)", fontWeight: 600,
         }}>
           ⚠ Backend unreachable: {fetchErr} — retrying every 60s automatically.
         </div>
       )}
-      {data?.error && <div style={{ color: "#ff3d5e", fontSize: ".8em" }}>API error: {data.error}</div>}
+      {data?.error && <div style={{ color: "var(--r)", fontSize: ".8em" }}>API error: {data.error}</div>}
 
       {/* Regime + health cards */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(170px,1fr))", gap: 8 }}>
         {scr && (
           <>
-            <div style={{ ...CARD, border: `1px solid ${riskOn ? "#00c896" : "#f59e0b"}` }}>
+            <div style={{ ...CARD, border: `1px solid ${riskOn ? "var(--g)" : "var(--y)"}` }}>
               <div style={LBL}>Gate 1 · Regime</div>
-              <div style={{ ...VAL, color: riskOn ? "#00c896" : "#f59e0b" }}>
+              <div style={{ ...VAL, color: riskOn ? "var(--g)" : "var(--y)" }}>
                 {riskOn ? "RISK-ON" : "RISK-OFF"}
               </div>
-              <div style={{ fontSize: ".64em", color: "var(--txs)" }}>{riskOn ? "LONGS fundable" : "STAND ASIDE — cash"}</div>
+              <div style={{ fontSize: ".74em", color: "var(--txs)" }}>{riskOn ? "LONGS fundable" : "STAND ASIDE — cash"}</div>
             </div>
             <div style={CARD}>
               <div style={LBL}>NIFTY vs 200-DMA</div>
               <div style={{ ...VAL, fontSize: "1.05em" }}>
                 {fmt(scr.nifty, 0)} / {fmt(scr.ma200, 0)}
-                <span style={{ fontSize: ".72em", marginLeft: 6, color: scr.nifty >= scr.ma200 ? "#00c896" : "#f59e0b" }}>
+                <span style={{ fontSize: ".82em", marginLeft: 6, color: scr.nifty >= scr.ma200 ? "var(--g)" : "var(--y)" }}>
                   ({fmt((scr.nifty / scr.ma200 - 1) * 100, 2)}%)
                 </span>
               </div>
@@ -131,28 +131,28 @@ export default function SwingPage() {
           <div style={{ ...CARD, border: `1px solid ${HEALTH_CLR[h.status] ?? "var(--bd)"}` }}>
             <div style={LBL}>🩺 Health (decay monitor)</div>
             <div style={{ ...VAL, color: HEALTH_CLR[h.status] ?? "var(--tx)" }}>{h.status}</div>
-            <div style={{ fontSize: ".62em", color: "var(--txs)" }}>
+            <div style={{ fontSize: ".72em", color: "var(--txs)" }}>
               PF {h.funded_side.rolling_pf ?? "—"} · persistence {h.funded_side.persistence ?? "—"} · n={h.funded_side.n_resolved}
             </div>
           </div>
         )}
       </div>
       {h?.status === "RETIRED" && (
-        <div style={{ background: "rgba(255,61,94,.08)", border: "1px solid #ff3d5e", borderRadius: 8, padding: "10px 14px", fontSize: ".8em", color: "#ff3d5e", fontWeight: 600 }}>
+        <div style={{ background: "rgba(255,61,94,.08)", border: "1px solid var(--r)", borderRadius: 8, padding: "10px 14px", fontSize: ".8em", color: "var(--r)", fontWeight: 600 }}>
           🔴 RETIRED by pre-registered decay rule (rolling PF &lt; {h.rules.retire_pf}). Fund nothing — paper bench continues. Auto-reinstates at PF ≥ {h.rules.reinstate_pf}.
         </div>
       )}
 
       {/* Funded candidates — shorts are NEVER fundable (short_side_policy.md) */}
       <div className="secHdr">
-        <div className="secDot" style={{ background: riskOn ? "#00c896" : "#f59e0b" }} />
+        <div className="secDot" style={{ background: riskOn ? "var(--g)" : "var(--y)" }} />
         <div className="secTitle">
           {riskOn ? `Funded candidates (long) · ${funded.length}`
                   : "Funded action: NONE — stand aside"}
         </div>
       </div>
       {!riskOn && (
-        <div style={{ background: "rgba(245,158,11,.06)", border: "1px solid rgba(245,158,11,.4)", borderRadius: 8, padding: "10px 14px", fontSize: ".78em", color: "#f59e0b" }}>
+        <div style={{ background: "rgba(245,158,11,.06)", border: "1px solid rgba(245,158,11,.4)", borderRadius: 8, padding: "10px 14px", fontSize: ".78em", color: "var(--y)" }}>
           Risk-off regime. Shorting is <b>not</b> the funded alternative — 15-year evidence
           (2,816 trades): <b>−125 bp/trade, PF 0.65</b>. The correct trade is <b>cash</b>
           (the allocation engine already holds it). Short setups sit on the paper bench below.
@@ -172,13 +172,13 @@ export default function SwingPage() {
                 <tr key={c.symbol}>
                   <td style={{ ...TD, color: "var(--txs)" }}>{i + 1}</td>
                   <td style={{ ...TD, fontWeight: 800 }}>{c.symbol}</td>
-                  <td style={{ ...TD, fontWeight: 700, color: "#00c896" }}>{c.direction.toUpperCase()}</td>
-                  <td style={{ ...TD, color: "var(--txd)", fontSize: ".72em" }}>{c.signal}</td>
+                  <td style={{ ...TD, fontWeight: 700, color: "var(--g)" }}>{c.direction.toUpperCase()}</td>
+                  <td style={{ ...TD, color: "var(--txd)", fontSize: ".82em" }}>{c.signal}</td>
                   <td style={TD}>{fmt(c.close)}</td>
-                  <td style={{ ...TD, color: "#00c896" }}>{fmt(c.target)}</td>
-                  <td style={{ ...TD, color: "#00c896", fontWeight: 700 }}>{fmt(c.target_pct, 1)}%</td>
-                  <td style={{ ...TD, color: "#ff3d5e" }}>{fmt(c.stop)}</td>
-                  <td style={{ ...TD, color: c.weight > 1 ? "#00c896" : c.weight < 1 ? "#ff3d5e" : "var(--txs)" }}>{fmt(c.weight)}</td>
+                  <td style={{ ...TD, color: "var(--g)" }}>{fmt(c.target)}</td>
+                  <td style={{ ...TD, color: "var(--g)", fontWeight: 700 }}>{fmt(c.target_pct, 1)}%</td>
+                  <td style={{ ...TD, color: "var(--r)" }}>{fmt(c.stop)}</td>
+                  <td style={{ ...TD, color: c.weight > 1 ? "var(--g)" : c.weight < 1 ? "var(--r)" : "var(--txs)" }}>{fmt(c.weight)}</td>
                 </tr>
               ))}
             </tbody>
@@ -187,7 +187,7 @@ export default function SwingPage() {
       )}
       {bench.length > 0 && (
         <details style={{ border: "1px solid var(--bd)", borderRadius: 8, background: "var(--c1)", padding: "8px 12px" }}>
-          <summary style={{ fontSize: ".74em", color: "var(--txd)", cursor: "pointer" }}>
+          <summary style={{ fontSize: ".84em", color: "var(--txd)", cursor: "pointer" }}>
             🧪 Paper bench · {bench.length} setups (learner only — DO NOT FUND)
           </summary>
           <div style={{ overflow: "auto", marginTop: 8 }}>
@@ -197,8 +197,8 @@ export default function SwingPage() {
                 {bench.slice(0, 15).map(c => (
                   <tr key={`${c.symbol}-${c.direction}`}>
                     <td style={{ ...TD, fontWeight: 800 }}>{c.symbol}</td>
-                    <td style={{ ...TD, fontWeight: 700, color: c.direction === "long" ? "#00c896" : "#ff3d5e" }}>{c.direction.toUpperCase()}</td>
-                    <td style={{ ...TD, color: "var(--txd)", fontSize: ".72em" }}>{c.signal}</td>
+                    <td style={{ ...TD, fontWeight: 700, color: c.direction === "long" ? "var(--g)" : "var(--r)" }}>{c.direction.toUpperCase()}</td>
+                    <td style={{ ...TD, color: "var(--txd)", fontSize: ".82em" }}>{c.signal}</td>
                     <td style={TD}>{fmt(c.close)}</td>
                     <td style={TD}>{fmt(c.target)}</td>
                     <td style={TD}>{fmt(c.stop)}</td>
@@ -210,24 +210,24 @@ export default function SwingPage() {
           </div>
         </details>
       )}
-      {scr && <div style={{ fontSize: ".68em", color: "var(--txs)" }}>Screen as of {scr.ts} · entry next open · stop 2×ATR · winners ride until close &lt; 5-DMA · risk ≤1%/trade · sleeve ≤10% of capital</div>}
+      {scr && <div style={{ fontSize: ".78em", color: "var(--txs)" }}>Screen as of {scr.ts} · entry next open · stop 2×ATR · winners ride until close &lt; 5-DMA · risk ≤1%/trade · sleeve ≤10% of capital</div>}
 
       {/* Paper P&L */}
       <div className="secHdr">
-        <div className="secDot" style={{ background: "#a78bfa" }} />
+        <div className="secDot" style={{ background: "var(--p)" }} />
         <div className="secTitle">Paper trades &amp; P&amp;L · {data?.open.length ?? 0} open / {res.length} resolved</div>
       </div>
       {res.length > 0 ? (
         <>
           <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-            <label style={{ fontSize: ".72em", color: "var(--txd)" }}>₹ per trade</label>
+            <label style={{ fontSize: ".82em", color: "var(--txd)" }}>₹ per trade</label>
             <input type="number" value={notional} min={5000} step={5000}
               onChange={e => setNotional(Number(e.target.value) || 50000)}
               style={{ background: "var(--c2)", color: "var(--tx)", border: "1px solid var(--bd)", borderRadius: 6, padding: "4px 8px", width: 110, fontFamily: "'JetBrains Mono',monospace", fontSize: ".8em" }} />
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(150px,1fr))", gap: 8 }}>
             <div style={CARD}><div style={LBL}>Total P&amp;L</div>
-              <div style={{ ...VAL, color: rets.reduce((a, b) => a + b, 0) >= 0 ? "#00c896" : "#ff3d5e" }}>
+              <div style={{ ...VAL, color: rets.reduce((a, b) => a + b, 0) >= 0 ? "var(--g)" : "var(--r)" }}>
                 ₹{fmt(rets.reduce((a, b) => a + b, 0) * notional, 0)}</div></div>
             <div style={CARD}><div style={LBL}>Win rate</div>
               <div style={VAL}>{fmt(wins.length / rets.length * 100, 0)}%</div></div>
@@ -243,15 +243,15 @@ export default function SwingPage() {
                 {res.slice().reverse().slice(0, 25).map((r, i) => (
                   <tr key={i}>
                     <td style={{ ...TD, fontWeight: 800 }}>{r.symbol}</td>
-                    <td style={{ ...TD, color: r.direction === "long" ? "#00c896" : "#ff3d5e" }}>{r.direction.toUpperCase()}</td>
+                    <td style={{ ...TD, color: r.direction === "long" ? "var(--g)" : "var(--r)" }}>{r.direction.toUpperCase()}</td>
                     <td style={TD}>{r.signal_date}</td>
                     <td style={TD}>{fmt(r.entry_px)}</td>
                     <td style={TD}>{fmt(r.exit_px)}</td>
                     <td style={TD}>{r.exit_date}</td>
                     <td style={{ ...TD, color: "var(--txd)" }}>{r.outcome}</td>
-                    <td style={{ ...TD, fontWeight: 700, color: (r.ret_net ?? 0) > 0 ? "#00c896" : "#ff3d5e" }}>
+                    <td style={{ ...TD, fontWeight: 700, color: (r.ret_net ?? 0) > 0 ? "var(--g)" : "var(--r)" }}>
                       {(r.ret_net ?? 0) > 0 ? "+" : ""}{fmt((r.ret_net ?? 0) * 100)}%</td>
-                    <td style={{ ...TD, color: (r.ret_net ?? 0) > 0 ? "#00c896" : "#ff3d5e" }}>
+                    <td style={{ ...TD, color: (r.ret_net ?? 0) > 0 ? "var(--g)" : "var(--r)" }}>
                       ₹{fmt((r.ret_net ?? 0) * notional, 0)}</td>
                   </tr>
                 ))}
@@ -275,11 +275,11 @@ export default function SwingPage() {
               {(data?.open ?? []).map((r, i) => (
                 <tr key={i}>
                   <td style={{ ...TD, fontWeight: 800 }}>{r.symbol}</td>
-                  <td style={{ ...TD, color: r.direction === "long" ? "#00c896" : "#ff3d5e" }}>{r.direction.toUpperCase()}</td>
+                  <td style={{ ...TD, color: r.direction === "long" ? "var(--g)" : "var(--r)" }}>{r.direction.toUpperCase()}</td>
                   <td style={TD}>{r.signal_date}</td>
                   <td style={TD}>{fmt(r.close)}</td>
-                  <td style={{ ...TD, color: "#00c896" }}>{fmt(r.target)}</td>
-                  <td style={{ ...TD, color: "#ff3d5e" }}>{fmt(r.stop)}</td>
+                  <td style={{ ...TD, color: "var(--g)" }}>{fmt(r.target)}</td>
+                  <td style={{ ...TD, color: "var(--r)" }}>{fmt(r.stop)}</td>
                 </tr>
               ))}
             </tbody>
@@ -291,7 +291,7 @@ export default function SwingPage() {
       {(data?.learner.length ?? 0) > 0 && (
         <>
           <div className="secHdr">
-            <div className="secDot" style={{ background: "#38b2f0" }} />
+            <div className="secDot" style={{ background: "var(--b)" }} />
             <div className="secTitle">🧠 Learner buckets (weight moves off 1.00 only past n≥20 + Wilson clears 50%)</div>
           </div>
           <div style={{ overflow: "auto", border: "1px solid var(--bd)", borderRadius: 8, background: "var(--c1)" }}>
@@ -300,12 +300,12 @@ export default function SwingPage() {
               <tbody>
                 {(data?.learner ?? []).map((b, i) => (
                   <tr key={i}>
-                    <td style={{ ...TD, color: b.direction === "long" ? "#00c896" : "#ff3d5e" }}>{b.direction}</td>
+                    <td style={{ ...TD, color: b.direction === "long" ? "var(--g)" : "var(--r)" }}>{b.direction}</td>
                     <td style={TD}>{b.signal}</td>
                     <td style={{ ...TD, color: "var(--txd)" }}>{b.regime}</td>
                     <td style={TD}>{b.n}</td>
                     <td style={TD}>{b.wins}</td>
-                    <td style={{ ...TD, fontWeight: 700, color: b.weight > 1 ? "#00c896" : b.weight < 1 ? "#ff3d5e" : "var(--txs)" }}>{fmt(b.weight)}</td>
+                    <td style={{ ...TD, fontWeight: 700, color: b.weight > 1 ? "var(--g)" : b.weight < 1 ? "var(--r)" : "var(--txs)" }}>{fmt(b.weight)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -314,7 +314,7 @@ export default function SwingPage() {
         </>
       )}
 
-      <div style={{ fontSize: ".68em", color: "var(--txs)" }}>
+      <div style={{ fontSize: ".78em", color: "var(--txs)" }}>
         Data refreshes via the 16:30 autopilot (screen → journal → resolve → learn). Execution is manual —
         nothing here places orders. Evidence base: 15y / 16,953 trades, sleeve-grade (≤10% of capital).
       </div>

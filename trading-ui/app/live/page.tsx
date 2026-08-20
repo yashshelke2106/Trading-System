@@ -30,7 +30,7 @@ function fmt(n: number | null | undefined, dec = 2) {
 
 const TH: React.CSSProperties = {
   background: "var(--c2)", color: "var(--txd)",
-  fontSize: ".66em", fontWeight: 700, textTransform: "uppercase",
+  fontSize: ".76em", fontWeight: 700, textTransform: "uppercase",
   letterSpacing: ".08em", padding: "8px 10px",
   borderBottom: "1px solid var(--bdh)", whiteSpace: "nowrap", textAlign: "left",
 }
@@ -44,7 +44,7 @@ const CARD: React.CSSProperties = {
   borderRadius: 8, padding: "12px 14px", marginBottom: 14, overflowX: "auto",
 }
 const H2: React.CSSProperties = {
-  fontSize: ".72em", textTransform: "uppercase", letterSpacing: ".1em",
+  fontSize: ".82em", textTransform: "uppercase", letterSpacing: ".1em",
   color: "var(--txd)", marginBottom: 10,
 }
 const INPUT: React.CSSProperties = {
@@ -54,7 +54,7 @@ const INPUT: React.CSSProperties = {
 }
 const BTN: React.CSSProperties = {
   background: "var(--c2)", border: "1px solid var(--bdh)", borderRadius: 4,
-  color: "var(--tx)", padding: "6px 12px", fontSize: ".75em", cursor: "pointer",
+  color: "var(--tx)", padding: "6px 12px", fontSize: ".84em", cursor: "pointer",
   whiteSpace: "nowrap",
 }
 
@@ -80,6 +80,11 @@ interface LiveStatus {
   transient?: boolean
   retry_after?: number
   stale?: boolean
+  // Set when the connection is KNOWN good but the latest re-check could not
+  // get through (429/timeout). The chip stays green; this is the footnote.
+  degraded?: string
+  degraded_message?: string
+  good_age_sec?: number
   refreshing?: boolean
   age_sec?: number
 }
@@ -175,8 +180,13 @@ export default function LivePage() {
           .then(r => r.json()).catch(() => null)
         if (s) setLive(s)
         if (s && !s.refreshing && s.status !== "timeout") {
-          setSaveMsg(s.working ? "saved — connection live"
-                               : `saved — ${s.status ?? "checking"}`)
+          // "saved — rate_limited" reads like the save failed. It didn't:
+          // the credential IS stored, the probe just could not get a slot.
+          setSaveMsg(
+            s.working ? "saved — connection live"
+              : s.transient
+                ? `saved — stored OK; Dhan busy (${s.status}), re-checking automatically`
+                : `saved — stored, but the connection check says: ${s.status ?? "checking"}`)
           break
         }
       }
@@ -210,11 +220,16 @@ export default function LivePage() {
             color: stColor, border: `1px solid ${stColor}`, borderRadius: 6,
             padding: "4px 12px",
           }}>
-            {probing ? "CHECKING…" : st.toUpperCase().replace(/_/g, " ")}
-            {live?.http ? ` (HTTP ${live.http})` : ""}
+            {probing ? "CHECKING…"
+              : live?.degraded ? "WORKING"
+              : st.toUpperCase().replace(/_/g, " ")}
+            {live?.http && !live?.degraded ? ` (HTTP ${live.http})` : ""}
           </span>
           <span style={{ color: "var(--txd)", fontSize: ".8em" }}>
-            {live?.message}
+            {live?.degraded
+              ? `verified ${live.good_age_sec ?? "?"}s ago; re-check is `
+                + `${live.degraded.replace(/_/g, " ")} (scanner has the quota)`
+              : live?.message}
             {live?.retry_after ? ` · auto-retry in ${live.retry_after}s` : ""}
             {live?.stale && !probing
               ? ` · last checked ${live.age_sec ?? "?"}s ago${live.refreshing ? ", refreshing" : ""}`
@@ -226,7 +241,7 @@ export default function LivePage() {
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(260px,1fr))", gap: 10 }}>
           <div>
-            <div style={{ fontSize: ".68em", color: "var(--txd)", marginBottom: 4 }}>
+            <div style={{ fontSize: ".78em", color: "var(--txd)", marginBottom: 4 }}>
               ACCESS TOKEN {live?.configured?.trade_token ? "(stored)" : "(missing)"}
             </div>
             <div style={{ display: "flex", gap: 6 }}>
@@ -236,7 +251,7 @@ export default function LivePage() {
             </div>
           </div>
           <div>
-            <div style={{ fontSize: ".68em", color: "var(--txd)", marginBottom: 4 }}>
+            <div style={{ fontSize: ".78em", color: "var(--txd)", marginBottom: 4 }}>
               CLIENT ID {live?.configured?.client_id ? "(stored)" : "(missing)"}
             </div>
             <div style={{ display: "flex", gap: 6 }}>
@@ -246,7 +261,7 @@ export default function LivePage() {
             </div>
           </div>
           <div>
-            <div style={{ fontSize: ".68em", color: "var(--txd)", marginBottom: 4 }}>
+            <div style={{ fontSize: ".78em", color: "var(--txd)", marginBottom: 4 }}>
               DATA API KEY {live?.configured?.data_api_key ? "(stored)" : "(missing)"}
             </div>
             <div style={{ display: "flex", gap: 6 }}>
@@ -256,11 +271,24 @@ export default function LivePage() {
             </div>
           </div>
         </div>
-        {saveMsg && <p style={{ color: "var(--txd)", fontSize: ".75em", marginTop: 8 }}>{saveMsg}</p>}
-        {!live?.working && (
+        {saveMsg && <p style={{ color: "var(--txd)", fontSize: ".84em", marginTop: 8 }}>{saveMsg}</p>}
+        {/* Only a BLOCKING state means scanning is actually idle. This used to
+            read `!live.working`, which is also true during a 429 — so a rate
+            limit CAUSED BY the running scanner rendered "Live scanning idle",
+            telling the user the opposite of what was happening. A transient
+            state is the connection working hard, not the connection down. */}
+        {!live?.working && !live?.transient && (
           <p style={{ color: AMBER, fontSize: ".78em", marginTop: 10 }}>
             Live scanning idle until the probe goes green. Once it does, start the
             scanner (start_trading.bat) — signals appear below as it writes them.
+          </p>
+        )}
+        {!live?.working && live?.transient && (
+          <p style={{ color: "var(--txd)", fontSize: ".78em", marginTop: 10 }}>
+            Credentials are fine — this check and the scanner share one Dhan
+            quota, and the scanner currently has it. Nothing is idle: signals
+            below keep updating, and the probe clears itself
+            {live?.retry_after ? ` in ~${live.retry_after}s` : " automatically"}.
           </p>
         )}
       </section>
@@ -277,7 +305,7 @@ export default function LivePage() {
         </div>
         {(["A", "B"] as const).map(g => (
           <div key={g} style={{ marginBottom: 10 }}>
-            <div style={{ fontSize: ".7em", color: "var(--txd)", margin: "6px 0" }}>
+            <div style={{ fontSize: ".80em", color: "var(--txd)", margin: "6px 0" }}>
               GRADE {g} — {byGrade[g]?.length ?? 0}
             </div>
             <table style={{ width: "100%", borderCollapse: "collapse" }}>

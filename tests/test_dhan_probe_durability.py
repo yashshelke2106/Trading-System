@@ -25,12 +25,23 @@ import api_server as A
 
 
 @pytest.fixture(autouse=True)
-def _clean_probe_state():
+def _clean_probe_state(monkeypatch):
     with A._PROBE_LOCK:
         A._PROBE["result"] = None
         A._PROBE["at"] = 0.0
         A._PROBE["inflight"] = False
+        # last-known-good must be cleared too, or a working verdict from an
+        # earlier test masks the transient result the next one asserts on
+        A._PROBE["good"] = None
+        A._PROBE["good_at"] = 0.0
     A._CACHE.pop("dhanlive", None)
+
+    # These tests mock rq.post to drive _dhan_probe's HTTP classification, but
+    # the probe short-circuits to "rate_limited" while the SCANNER holds a
+    # shared backoff — so with a live scanner running, four of them failed
+    # before the mock was ever reached. Neutralise the real backoff so the
+    # tests exercise classification, which is what they are about.
+    monkeypatch.setattr("core.api_dhan._shared_backoff_get", lambda kind: 0.0)
     yield
 
 
@@ -236,3 +247,70 @@ def test_endpoint_reports_checking_when_nothing_is_known_yet(monkeypatch):
     out = asyncio.run(A.dhan_live_status())
     assert out["status"] == "checking" and out["transient"] is True
     assert "configured" in out
+
+
+# ── a throttle must not read as a broken connection ──────────────────────
+#
+# Reported from the live dashboard 2026-08-11: the panel showed
+# "RATE LIMITED ... Live scanning idle until the probe goes green" while the
+# token was valid and the scanner was running — in fact it was the scanner's
+# own quota use that produced the 429. A transient answer overwrote the
+# cached good verdict, so a blip erased knowledge instead of qualifying it.
+
+def test_a_429_does_not_erase_a_recent_working_verdict(monkeypatch):
+    monkeypatch.setattr(A, "_dhan_probe",
+                        lambda: _probe(working=True, status="working"))
+    A._probe_now()
+    assert A._dhan_probe_cached()["working"] is True
+
+    # _probe_now runs the probe SYNCHRONOUSLY; _dhan_probe_cached(refresh=True)
+    # would only queue it in the background and hand back the stale value.
+    monkeypatch.setattr(A, "_dhan_probe", lambda: _probe(
+        status="rate_limited", transient=True, retry_after=28))
+    A._probe_now()
+    out = A._dhan_probe_cached()
+
+    assert out["working"] is True, "a throttle is not a broken connection"
+    assert out["degraded"] == "rate_limited"
+    assert out["retry_after"] == 28
+
+
+def test_a_401_is_never_masked_by_a_good_verdict(monkeypatch):
+    """The safety valve: only TRANSIENT states may be softened."""
+    monkeypatch.setattr(A, "_dhan_probe",
+                        lambda: _probe(working=True, status="working"))
+    A._probe_now()
+
+    monkeypatch.setattr(A, "_dhan_probe",
+                        lambda: _probe(status="expired", http=401))
+    A._probe_now()
+    out = A._dhan_probe_cached()
+    assert out["working"] is False and out["status"] == "expired"
+    assert "degraded" not in out
+
+
+def test_a_stale_good_verdict_stops_covering_for_a_throttle(monkeypatch):
+    """Bounded: a dead connection cannot hide behind an old success."""
+    monkeypatch.setattr(A, "_dhan_probe",
+                        lambda: _probe(working=True, status="working"))
+    A._probe_now()
+    with A._PROBE_LOCK:
+        A._PROBE["good_at"] = time.monotonic() - (A._TTL_OK + 1)
+
+    monkeypatch.setattr(A, "_dhan_probe", lambda: _probe(
+        status="rate_limited", transient=True))
+    A._probe_now()
+    out = A._dhan_probe_cached()
+    assert out["working"] is False and out["status"] == "rate_limited"
+
+
+def test_saving_credentials_drops_the_good_verdict(monkeypatch):
+    """A new token must not inherit the old token's success."""
+    monkeypatch.setattr(A, "_dhan_probe",
+                        lambda: _probe(working=True, status="working"))
+    A._probe_now()
+    monkeypatch.setattr(A.threading, "Thread",
+                        lambda *a, **k: type("T", (), {"start": lambda s: None})())
+    A._invalidate_probe()
+    with A._PROBE_LOCK:
+        assert A._PROBE["good"] is None

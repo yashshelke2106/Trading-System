@@ -1,8 +1,70 @@
 # NO port pin here — with no explicit port, Streamlit auto-increments
 # (8501 busy -> 8502 -> 8503 ...), so MULTIPLE dashboards can run at once.
 #
-# Only ONE Streamlit app remains (legacy streamlit_app.py + dashboard.py
-# deleted 2026-07-15):
-#   8511  swing_app.py  -> start_swing.bat (Swing Finder, no API keys)
+# Port map (launchers pass ports explicitly, so these are deterministic):
+#   8511  swing_app.py      -> start_swing.bat  (Swing Finder, NO API keys)
+#   8513  streamlit_app.py  -> start_legacy.bat (legacy terminal, Dhan token)
+#   8503  events_app.py     -> events_app.bat   (events/news, read-only)
+#
+# 8501 is Streamlit's GLOBAL default, so other projects' dashboards land
+# there. This project stays off it entirely and must never kill it.
 [browser]
 gatherUsageStats = false
+
+# ── Theme: bright / calm (2026-08-11) ────────────────────────────────────
+# swing_app.py and events_app.py inject NO CSS of their own, so this section
+# is the only thing styling them. streamlit_app.py additionally hardcodes the
+# same palette in its own <style> block; the two are kept in sync deliberately.
+#
+# Only [theme] is defined (no [theme.dark]) — that LOCKS the apps to this
+# single mode on purpose. streamlit_app.py's injected CSS is hardcoded light,
+# so offering a dark toggle would produce a half-dark, unreadable hybrid.
+#
+# Every colour here is the light-theme token already contrast-checked for
+# trading-ui/app/globals.css, so all four dashboards read as one product.
+[theme]
+base                        = "light"
+primaryColor                = "#1564bf"   # buttons/links — 5.9:1, white button text is legible
+backgroundColor             = "#f4f6fa"   # soft cool white rather than stark #ffffff
+secondaryBackgroundColor    = "#eef1f7"
+textColor                   = "#101826"   # deep navy — calmer than pure black, 16.5:1
+linkColor                   = "#1564bf"
+borderColor                 = "#d8dfea"
+codeBackgroundColor         = "#eef1f7"
+codeTextColor               = "#0f3f7a"
+dataframeBorderColor        = "#d8dfea"
+dataframeHeaderBackgroundColor = "#eef1f7"
+
+# Semantic palette. Trading UI convention: green = long/positive,
+# red = short/negative. All darkened to clear AA on the light background.
+greenColor                  = "#077548"
+redColor                    = "#c3273e"
+orangeColor                 = "#a4560d"
+yellowColor                 = "#865f04"
+blueColor                   = "#1564bf"
+violetColor                 = "#6b4bdc"
+grayColor                   = "#5d6d85"
+
+# Charts. Categorical starts on blue/green so a default 2-series plot reads
+# as the house long/short pair rather than an arbitrary matplotlib palette.
+chartCategoricalColors = ["#1564bf", "#077548", "#a4560d", "#6b4bdc", "#c3273e", "#865f04", "#5d6d85"]
+chartSequentialColors  = ["#f2f7fd", "#dceafb", "#c0daf7", "#9dc5f0", "#77ade8",
+                          "#5292dd", "#3179cf", "#1c62b4", "#124b8d", "#0b3566"]
+
+font        = "Inter:https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap"
+headingFont = "Inter:https://fonts.googleapis.com/css2?family=Inter:wght@600;700;800&display=swap"
+codeFont    = "'JetBrains Mono':https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&display=swap"
+baseFontSize     = 15
+linkUnderline    = false
+baseRadius       = "8px"
+showWidgetBorder = true
+
+# Sidebar sits one step deeper than the page so it reads as a panel, not a
+# gap. streamlit_app.py mirrors this exact value in its own CSS.
+[theme.sidebar]
+backgroundColor          = "#eef2f9"
+secondaryBackgroundColor = "#e3e8f1"
+codeBackgroundColor      = "#e3e8f1"
+textColor                = "#101826"
+borderColor              = "#d8dfea"
+primaryColor             = "#1564bf"

@@ -40,7 +40,7 @@ export default function IndexBar() {
         const q   = quotes[key]
         const isVix = key === "INDIAVIX"
         const up    = q.chg >= 0
-        const clr   = isVix ? (up ? "#f59e0b" : "#00c896") : (up ? "#00c896" : "#ff3d5e")
+        const clr   = isVix ? (up ? "var(--y)" : "var(--g)") : (up ? "var(--g)" : "var(--r)")
         const arrow = up ? "▲" : "▼"
         return (
           <div key={key} className="ixItem">

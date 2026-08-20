@@ -18,7 +18,7 @@ function fmt(n: number | null | undefined, dec = 2) {
 
 const TH: React.CSSProperties = {
   background: "var(--c2)", color: "var(--txd)",
-  fontSize: ".66em", fontWeight: 700, textTransform: "uppercase",
+  fontSize: ".76em", fontWeight: 700, textTransform: "uppercase",
   letterSpacing: ".08em", padding: "8px 10px",
   borderBottom: "1px solid var(--bdh)", whiteSpace: "nowrap", textAlign: "left",
 }
@@ -32,7 +32,7 @@ const CARD: React.CSSProperties = {
   borderRadius: 8, padding: "12px 14px", marginBottom: 14, overflowX: "auto",
 }
 const H2: React.CSSProperties = {
-  fontSize: ".72em", textTransform: "uppercase", letterSpacing: ".1em",
+  fontSize: ".82em", textTransform: "uppercase", letterSpacing: ".1em",
   color: "var(--txd)", marginBottom: 10,
 }
 
@@ -52,7 +52,7 @@ function Chip({ v }: { v: string }) {
   return (
     <span style={{
       display: "inline-block", padding: "1px 8px", borderRadius: 10,
-      fontSize: ".72em", fontFamily: "'JetBrains Mono', monospace",
+      fontSize: ".82em", fontFamily: "'JetBrains Mono', monospace",
       color: c, border: `1px solid ${c}`, whiteSpace: "nowrap",
     }}>{v || "open"}</span>
   )
@@ -65,7 +65,7 @@ function Stat({ label, value, color }: { label: string; value: string; color?: s
         fontSize: "1.5em", fontFamily: "'JetBrains Mono', monospace",
         color: color ?? "var(--tx)",
       }}>{value}</div>
-      <div style={{ fontSize: ".62em", textTransform: "uppercase", letterSpacing: ".08em", color: "var(--txd)" }}>
+      <div style={{ fontSize: ".72em", textTransform: "uppercase", letterSpacing: ".08em", color: "var(--txd)" }}>
         {label}
       </div>
     </div>
