@@ -263,6 +263,18 @@ def run(layers=ALL_LAYERS, universe: str = "top100",
     with open(STATE_FILE, "w", encoding="utf-8") as f:
         json.dump(status, f, indent=2, default=str)
 
+    # A run that reports "OK" can still mean the data behind it is decaying:
+    # this scheduled run succeeding says nothing about how stale the archive
+    # was BEFORE it ran. 2026-08-20: the EOD archive was 6 days stale and one
+    # intraday symbol had drifted to 27 of a 60-day recovery window, entirely
+    # unnoticed, because nothing was watching. Never let a monitoring failure
+    # block the capture run it is monitoring.
+    try:
+        from core.freshness_alarm import check_and_notify
+        check_and_notify(quiet=True)
+    except Exception as exc:
+        status.setdefault("warnings", []).append(f"freshness_alarm failed: {exc}")
+
     return status
 
 
