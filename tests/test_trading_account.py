@@ -282,13 +282,18 @@ def test_expired_option_settles_at_intrinsic_not_the_next_chain(book, monkeypatc
     st, pos = _open_one(book, opt(expiry_days=3, prem=20.0, sl_prem=10.0,
                                   target_prem=35.0))
     assert pos["instrument"] == "option"
-    entry_day = ta._parse_date(pos["opened_date"])
+    # Backdate the trade so the whole life of the contract sits in finished
+    # bars — a settlement cannot be priced off a bar that has not happened.
+    entry_day = date.today() - timedelta(days=10)
+    st["open"][0]["opened_date"] = str(entry_day)
+    st["open"][0]["option_expiry"] = str(entry_day + timedelta(days=3))
+    ta.save_state(st)
     # price drifts within the levels, then the contract expires 2 points ITM
     rows = [(101.0, 99.0, 100.0), (102.0, 99.0, 101.0), (103.0, 100.0, 102.0),
             (104.0, 101.0, 103.0), (105.0, 102.0, 104.0)]
     monkeypatch.setattr(ta, "daily_bars",
                         lambda s, days_back=120: bars(entry_day, rows))
-    ta.mark_and_exit(st)
+    ta.mark_and_exit(ta.load_state())
     closed = ta.load_state()["closed"][0]
     assert closed["exit_reason"] == "EXPIRED"
     # intrinsic of a 100 CE with spot 102 is 2.00 — not a next-expiry premium
@@ -369,6 +374,70 @@ def test_daily_loss_stop_halts_new_entries(book):
     assert book["day"]["halted"]
     r = ta.select_and_open(book, signals=[sig()])
     assert r.get("halted") and r["opened"] == []
+
+
+# ── the forming bar ─────────────────────────────────────────────────────────
+
+def test_todays_bar_is_not_final_until_the_close():
+    today = date.today()
+    mid = datetime.combine(today, datetime.min.time()).replace(hour=14, minute=5)
+    after = datetime.combine(today, datetime.min.time()).replace(hour=16, minute=0)
+    assert ta._bar_is_final(today - timedelta(days=1), mid) is True
+    assert ta._bar_is_final(today, mid) is False
+    assert ta._bar_is_final(today, after) is True
+
+
+def test_time_exit_waits_for_a_finished_bar(book, monkeypatch):
+    """A time exit is priced at the close. Booking it mid-session writes a
+    provisional number into realised P&L, which is never revisited."""
+    book["policy"] = ta.RiskPolicy(max_hold_days=1).to_dict()
+    ta.save_state(book)
+    st, _ = _open_one(book, sig(entry=100.0, sl=95.0, target=115.0))
+
+    # One bar, dated today, touching neither level — so only the time exit can
+    # fire, and it is priced at a close that is still moving.
+    rows = [{"date": date.today(), "open": 100.0, "high": 101.0,
+             "low": 99.0, "close": 100.5}]
+    monkeypatch.setattr(ta, "daily_bars", lambda s, days_back=120: rows)
+    st["open"][0]["opened_date"] = str(date.today() - timedelta(days=5))
+    ta.save_state(st)
+
+    mid = datetime.combine(date.today(), datetime.min.time()).replace(hour=14)
+    after = datetime.combine(date.today(), datetime.min.time()).replace(hour=16)
+
+    ta.mark_and_exit(ta.load_state(), now=mid)
+    assert ta.load_state()["closed"] == [], "must not book a forming close"
+
+    ta.mark_and_exit(ta.load_state(), now=after)
+    closed = ta.load_state()["closed"]
+    assert closed and closed[0]["exit_reason"] == "TIME_EXIT"
+
+
+def test_a_level_hit_is_taken_immediately_even_mid_session(book, monkeypatch):
+    """Highs and lows only widen as a session runs, so a stop touched at 14:00
+    genuinely filled. Delaying it would postpone real exits for nothing."""
+    st, p = _open_one(book, sig(entry=100.0, sl=95.0, target=115.0))
+    rows = [{"date": date.today(), "open": 100.0, "high": 101.0,
+             "low": 94.0, "close": 96.0}]
+    st["open"][0]["opened_date"] = str(date.today() - timedelta(days=1))
+    ta.save_state(st)
+    monkeypatch.setattr(ta, "daily_bars", lambda s, days_back=120: rows)
+    mid = datetime.combine(date.today(), datetime.min.time()).replace(hour=14)
+    ta.mark_and_exit(st, now=mid)
+    closed = ta.load_state()["closed"]
+    assert closed and closed[0]["exit_reason"] == "SL_HIT"
+
+
+def test_a_mid_session_mark_is_labelled_as_forming(book, monkeypatch):
+    st, p = _open_one(book, sig(entry=100.0, sl=95.0, target=115.0))
+    rows = [{"date": date.today(), "open": 100.0, "high": 101.0,
+             "low": 99.0, "close": 100.5}]
+    st["open"][0]["opened_date"] = str(date.today() - timedelta(days=1))
+    ta.save_state(st)
+    monkeypatch.setattr(ta, "daily_bars", lambda s, days_back=120: rows)
+    mid = datetime.combine(date.today(), datetime.min.time()).replace(hour=14)
+    ta.mark_and_exit(st, now=mid)
+    assert "forming bar" in ta.load_state()["open"][0]["mark_method"]
 
 
 # ── reporting stays honest ──────────────────────────────────────────────────

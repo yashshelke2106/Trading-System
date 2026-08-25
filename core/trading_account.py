@@ -75,7 +75,7 @@ import shutil
 import sys
 import warnings
 from dataclasses import dataclass, field, asdict
-from datetime import datetime, date, timedelta, timezone
+from datetime import datetime, date, time as dt_time, timedelta, timezone
 from typing import Dict, List, Optional, Tuple, Any
 
 warnings.filterwarnings("ignore")
@@ -226,6 +226,31 @@ def _lot_size_for(symbol: str) -> int:
     except Exception:
         pass
     return 1
+
+
+NSE_CLOSE = dt_time(15, 30)     # IST
+
+
+def _bar_is_final(d: date, now: Optional[datetime] = None) -> bool:
+    """Is this daily bar finished, or is it still forming?
+
+    Today's bar keeps moving until 15:30 IST. The distinction matters for
+    exactly one class of exit: anything priced at the CLOSE (a time exit, or an
+    option settling at intrinsic) would be booked against a provisional number
+    the rest of the session can still change - and once booked it is realised
+    P&L that never gets revisited.
+
+    Level hits are deliberately NOT gated by this. A bar's high and low only
+    ever widen as the session runs, so a stop or target already touched at
+    14:00 genuinely filled and will still be true at the close. Gating those
+    would delay real exits by a day and buy nothing.
+    """
+    now = now or datetime.now()
+    if d < now.date():
+        return True
+    if d > now.date():
+        return False
+    return now.time() >= NSE_CLOSE
 
 
 def _intrinsic(spot: float, strike: float, option_type: str) -> float:
@@ -662,7 +687,8 @@ def reset(capital: float = DEFAULT_CAPITAL, policy: Optional[RiskPolicy] = None,
 # --------------------------------------------------------------------------
 
 def _resolve_exit(p: Dict, bars: List[Dict], policy: RiskPolicy,
-                  today: Optional[date] = None) -> Optional[Dict]:
+                  today: Optional[date] = None,
+                  now: Optional[datetime] = None) -> Optional[Dict]:
     """Walk the bars AFTER entry and return the first exit, or None.
 
     Pessimistic on ambiguity: a bar that spans both the stop and the target is
@@ -671,6 +697,7 @@ def _resolve_exit(p: Dict, bars: List[Dict], policy: RiskPolicy,
     have.
     """
     today = today or _today()
+    now = now or datetime.now()
     entry_date = _parse_date(p.get("opened_date"))
     if entry_date is None:
         return None
@@ -686,6 +713,11 @@ def _resolve_exit(p: Dict, bars: List[Dict], policy: RiskPolicy,
         if expiry is not None and b["date"] > expiry:
             settle_bar = next((x for x in reversed(forward)
                                if x["date"] <= expiry), None)
+            # Settlement is priced at the close, so it waits for a final bar.
+            # Booking intrinsic off a forming close writes a provisional number
+            # into realised P&L, and realised P&L is never revisited.
+            if settle_bar is not None and not _bar_is_final(settle_bar["date"], now):
+                return None
             spot = _f(settle_bar["close"]) if settle_bar else _f(b["open"])
             return {"exit": _intrinsic(spot, _f(p.get("option_strike")),
                                        p.get("option_type") or "CE"),
@@ -710,6 +742,8 @@ def _resolve_exit(p: Dict, bars: List[Dict], policy: RiskPolicy,
         # put an estimate into REALISED P&L. Expiry already bounds the hold, so
         # options run to a level or to intrinsic value.
         if i >= policy.max_hold_days and not is_option:
+            if not _bar_is_final(b["date"], now):
+                return None            # priced at the close; wait for it
             spot = _f(b["close"])
             return {"exit": spot, "exit_spot": spot, "reason": "TIME_EXIT",
                     "date": b["date"], "held_days": i}
@@ -781,7 +815,8 @@ def _close_position(state: Dict, p: Dict, exit_px: float, reason: str,
 
 
 def mark_and_exit(state: Optional[Dict] = None,
-                  today: Optional[date] = None) -> Dict:
+                  today: Optional[date] = None,
+                  now: Optional[datetime] = None) -> Dict:
     """Mark every open position to market and close the ones that resolved.
 
     This is where money is actually won and lost: a target that fills credits
@@ -792,6 +827,7 @@ def mark_and_exit(state: Optional[Dict] = None,
         return {"ok": False, "reason": "no account; run reset first"}
     policy = RiskPolicy.from_dict(state.get("policy"))
     today = today or _today()
+    now = now or datetime.now()
 
     exits: List[Dict] = []
     no_data: List[str] = []
@@ -806,7 +842,7 @@ def mark_and_exit(state: Optional[Dict] = None,
             no_data.append(sym)
             continue
 
-        ex = _resolve_exit(p, bars, policy, today)
+        ex = _resolve_exit(p, bars, policy, today, now)
         if ex:
             exits.append(_close_position(state, p, _f(ex["exit"]), ex["reason"],
                                          int(ex["held_days"]), ex.get("date")))
@@ -815,14 +851,18 @@ def mark_and_exit(state: Optional[Dict] = None,
         last = bars[-1]
         spot = _f(last["close"])
         p["mark_spot"] = spot
+        # A forming bar is fine to MARK against - the unrealised line is meant
+        # to move intraday - but it is labelled so nobody reads a mid-session
+        # number as a settled one.
+        forming = "" if _bar_is_final(last["date"], now) else " [forming bar]"
         if p.get("instrument") == "option":
             p["mark"] = round(_mark_option(p, spot, last["date"]), 4)
-            p["mark_method"] = "delta-approx (unrealised only)"
+            p["mark_method"] = "delta-approx (unrealised only)" + forming
             p["unrealised"] = round(_f(p["qty"]) * (_f(p["mark"]) - _f(p["entry"]))
                                     - _f(p.get("costs")), 2)
         else:
             p["mark"] = round(spot, 4)
-            p["mark_method"] = "last daily close"
+            p["mark_method"] = "last daily close" + forming
             sign = 1.0 if p.get("direction") == "long" else -1.0
             p["unrealised"] = round(sign * _f(p["qty"]) * (spot - _f(p["entry"]))
                                     - _f(p.get("costs")), 2)
