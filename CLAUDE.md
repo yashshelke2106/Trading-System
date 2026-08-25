@@ -16,6 +16,7 @@ stop_trading.bat      ← kills all 3 processes
 - `streamlit run streamlit_app.py` — legacy dashboard (still works)
 - `live_runner.py` — live execution loop (paper trade mode)
 - `signal_tracker.py` — tracks signal outcomes to `logs/signal_journal.jsonl`
+- `account_task.py` — daily funded-account cycle (mark → exit → select → open)
 
 ## Critical Files
 | File | Purpose |
@@ -24,6 +25,7 @@ stop_trading.bat      ← kills all 3 processes
 | `core/signal_engine.py` | Pattern voting (needs 3+ votes, 2-vote lead) |
 | `core/trade_ranker.py` | Weights: signal 25%, order_flow 20%, breakout 18%, liq 17% |
 | `core/risk_engine.py` | Daily loss = P&L / capital (not raw rupee vs 0.05) |
+| `core/trading_account.py` | The ₹10L funded book — risk sizing, cash ledger, exits |
 | `core/fake_breakout_filter.py` | VWAP + volume dry-up + spring detection |
 | `core/api_dhan.py` | Dhan API + yfinance fallback (_yfinance_intraday, _yfinance_daily) |
 | `core/dashboard_data.py` | All data fetching for Streamlit |
@@ -46,6 +48,50 @@ Each signal: `{symbol, direction, entry_price, sl_price, target_price, rr_ratio,
 ## Current Mode
 **Signal-only**: scan → signals.json → Streamlit dashboard → manual execution in Dhan app.
 `PAPER_TRADE=True` in config.py — no real orders even if live_runner.py is running.
+
+## Funded Account — the book that actually trades (2026-08-25)
+`core/trading_account.py` is the layer that was missing: a **single pot of
+₹10,00,000** that selects its own trades, sizes them by risk, debits cash to
+open and credits it on exit. Distinguish it from its neighbours — they answer
+different questions and will not agree, which is correct:
+
+| Surface | Question it answers | Base |
+|---|---|---|
+| `/api/accuracy` | did the signal's levels get hit? | per-signal % |
+| `/api/portfolio` | what would a journal replay have paid? | retrospective |
+| **`/api/account`** | **starting from a pot, am I up or down?** | **a balance** |
+
+```
+python account_task.py --reset --capital 1000000   # archive P&L, fresh book
+python account_task.py                             # daily cycle (after 16:00 IST)
+python account_task.py --status
+```
+
+Run the cycle **after the close** — exits resolve against the last *daily* bar,
+and marking a forming bar is the corruption the capture layer already fought.
+Exits run BEFORE entries so cash freed by a close is spendable the same cycle.
+
+**Sizing** is `risk_per_trade_pct` (0.75% of equity) ÷ stop distance, then
+clipped by caps — position 15%, portfolio risk 6%, gross deployment 90%,
+options sleeve 30%, max 12 positions, 1 per symbol, −3% daily loss stop.
+
+**Instrument routing** — long → cash equity | CE; short → **stock futures** | PE
+(you cannot short cash equity for a multi-day hold). Delta-one is preferred,
+*but only when it carries ≥50% of the intended risk* (`min_risk_fill`). Cash
+equity is infinitely divisible, so "does it fit" would route every long to
+equity and leave the options sleeve dead; a 30-share token position is not the
+trade. When the cash leg shrinks to a token, the option wins — which is exactly
+the case where paying theta is justified (see `core/option_buy_eval.py`).
+
+**Invariant**: `cash + committed == capital + realised_pnl` is asserted on every
+write and RAISES, because a P&L number from a leaking ledger is worthless.
+Other honesty rules: no lookahead (exits resolve only on bars *after* entry), a
+bar spanning both levels books the **stop**, expired options settle at
+**intrinsic** on their own expiry date (never against the next chain), and
+unaffordable signals are counted in `skipped_no_cash` rather than paid out.
+
+`/api/account` is **read-only** — reset and cycle stay on the CLI so a stray GET
+cannot wipe the book. Still PAPER: no order is placed anywhere.
 
 ## Dhan API Status — LIVE again (2026-08-04)
 **The Dhan Data API subscription is ACTIVE again** (was expired 2026-07-24 →
@@ -159,3 +205,8 @@ don't expect stock futures to fill.
 - `config.py` `PAPER_TRADE` flag — must stay True unless explicitly going live
 - `core/risk_engine.py` daily loss formula — was buggy before, verify ratio not raw rupee
 - `core/execution.py` direction map — long→BUY, short→SELL for Dhan API
+- `core/trading_account.py` `check_invariant()` — never downgrade it to a warning.
+  It raises on purpose: a P&L number from a leaking cash ledger is worthless,
+  and every prior money-view in this repo failed by reporting one anyway.
+- `core/trading_account.py` pessimistic same-bar fill — a bar spanning both the
+  stop and the target books the STOP. Flipping it manufactures a fake edge.

@@ -1113,6 +1113,32 @@ async def dhan_live_status(refresh: bool = False):
         return _last_known("error", str(e))
 
 
+@app.get("/api/account")
+async def get_account():
+    """The funded paper account — one pot of money, marked to market.
+
+    This is the book that actually trades: it selects its own positions, sizes
+    them against `risk_per_trade_pct`, debits cash to open and credits it on
+    exit. Unlike /api/portfolio (a retrospective replay of a journal) and
+    /api/accuracy (per-signal statistics), the number here is a balance: it
+    moves only because a position was funded, marked, or closed.
+
+    Read-only by design. Resetting the book and running a cycle are
+    side-effectful and stay on the CLI, so a stray GET can never wipe a P&L
+    history or open positions.
+    """
+    def _load():
+        from core.trading_account import summary
+        return _json_safe(summary())
+
+    try:
+        return await _run(lambda: _cached("account", 30, _load))
+    except RunTimeout as e:
+        return {"ok": False, "reason": str(e)}
+    except Exception as e:
+        return {"ok": False, "reason": str(e)}
+
+
 @app.get("/api/paper-book")
 async def get_paper_book():
     """Forward paper run of the 50/50 swing book.
