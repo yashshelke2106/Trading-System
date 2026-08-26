@@ -25,6 +25,7 @@ WHAT IT DOES
   eod       append today's NSE bhavcopy to the survivorship-complete archive
   intraday  merge the last 60d of 5m bars for the configured universe
   state     classify trend state for the universe and snapshot it
+  flow      participant-wise OI/volume (FII/DII/Pro/Client) + FII/DII cash
 
 All three are idempotent — re-running merges rather than duplicates.
 
@@ -214,9 +215,42 @@ def run_state(universe: str = "top100", with_context: bool = False) -> dict:
     return out
 
 
+# ── Layer: institutional flow ───────────────────────────────────────────────
+
+def run_flow(days_back: int = 7) -> dict:
+    """Participant-wise OI/volume + FII/DII cash.
+
+    Asymmetric like the intraday layer, and for the same reason: the NSCCL
+    participant archive is permanent and back-fillable, but the FII/DII cash
+    endpoint serves ONLY the current day and has no archive behind it. A day
+    this job does not run is a cash-flow observation that can never be
+    recovered, so cash failure is reported but does not fail the layer -- the
+    positioning half is what a study depends on.
+    """
+    out = {"layer": "flow", "ok": False}
+    try:
+        from core import flow_capture as fx
+        end = date.today()
+        res = fx.build(end - timedelta(days=days_back), end,
+                       sleep=0.25, verbose=False)
+        out.update({"ok": True, "oi_days_written": res["written"],
+                    "skipped": res["skipped"], "missing": res["missing"]})
+        try:
+            rows = fx.fetch_cash_flow(fx._get_session())
+            out["cash_rows"] = fx.append_cash(rows) if rows else 0
+            if not rows:
+                out["cash_error"] = "fetch returned nothing — day lost, unrecoverable"
+        except Exception as exc:
+            out["cash_error"] = f"{type(exc).__name__}: {exc}"
+    except Exception as exc:
+        out["error"] = f"{type(exc).__name__}: {exc}"
+        out["trace"] = traceback.format_exc()[-800:]
+    return out
+
+
 # ── Orchestration ───────────────────────────────────────────────────────────
 
-ALL_LAYERS = ("eod", "intraday", "day_structure", "swing", "state")
+ALL_LAYERS = ("eod", "intraday", "day_structure", "swing", "state", "flow")
 
 
 def run(layers=ALL_LAYERS, universe: str = "top100",
@@ -238,6 +272,8 @@ def run(layers=ALL_LAYERS, universe: str = "top100",
         status["layers"]["swing"] = run_swing(universe)
     if "state" in layers:
         status["layers"]["state"] = run_state(universe, with_context=with_context)
+    if "flow" in layers:
+        status["layers"]["flow"] = run_flow()
 
     status["elapsed_sec"] = round(time.time() - started, 1)
     status["ok"] = all(v.get("ok") for v in status["layers"].values())
