@@ -42,6 +42,23 @@ from typing import Dict, Optional
 STATE_FILE = os.path.join("logs", "swing_learner.json")
 AUDIT_FILE = os.path.join("logs", "swing_learner_log.jsonl")
 
+# Directions whose rank weight is pinned to 1.0 regardless of posterior.
+# This IS an asymmetry, and the module above otherwise promises none -- so
+# state the evidence rather than bury it. Re-resolving 6,188 short signals
+# (2017-2026, point-in-time archive) under ten different exit policies put the
+# short side under water in EVERY one: PF 0.68-0.83, t = -4.8 to -15.8.
+# Against that, the live bucket read short|risk_off at PF 3.19 on 28 trades
+# and was handing shorts a 1.06x rank boost. Twenty-eight observations cannot
+# overturn 6,188, and weight() cannot tell the difference because it scores
+# WIN RATE -- which is precisely the statistic the short book flatters
+# (71% wins at PF 0.72).
+#
+# Shorts are still RECORDED: falsification evidence is the point of the paper
+# bench, and freezing the weight keeps that evidence out of the ranker without
+# blinding the journal. Funding is blocked separately in swing_screen.py.
+# The unlock condition is unchanged: docs/research/short_side_policy.md.
+WEIGHT_FROZEN_DIRECTIONS = frozenset({"short"})
+
 MIN_N = 20          # observations before a weight may leave 1.0
 W_MIN, W_MAX = 0.5, 1.5
 BASELINE = 0.5      # coin-flip win-rate baseline
@@ -148,6 +165,8 @@ class SwingLearner:
         """Rank multiplier for a candidate. Signature keeps the signal arg so
         callers are unchanged, but trust is pooled per direction x regime.
         1.0 = neutral / not enough data."""
+        if direction in WEIGHT_FROZEN_DIRECTIONS:
+            return 1.0
         b = self.buckets.get(self.bucket_key(direction, regime))
         if not b or b["n"] < MIN_N:
             return 1.0

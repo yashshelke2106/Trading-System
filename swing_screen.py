@@ -40,6 +40,32 @@ YMAP = {"MCDOWELL-N": "UNITDSPR"}
 MIN_TARGET_PCT = 2.0
 JOURNAL_FILE = os.path.join("logs", "swing_paper_journal.jsonl")
 
+# ── trade geometry (ATR multiples) ───────────────────────────────────────
+# TARGET is informational under exit_style "C": swing_tracker guards every
+# target check with `if not style_c`, so the reward leg is the 5-DMA momentum
+# exit, not this level. It still drives MIN_TARGET_PCT and the rank, so it
+# stays at 2x.
+#
+# STOP widened 2x -> 4x on 2026-09-04. Measured on 17,313 long signals across
+# the 52 symbols with an unambiguous price history (2017-2026), re-resolved
+# under the SHIPPING exit (style-C momentum exit for winners). PF is monotone
+# in stop depth:  2x 1.138 | 3x 1.218 | 4x 1.274 | 5x 1.329 | 6x 1.343.
+# The 2x stop fired on 42.6% of trades and cost +1.19% on every trade it
+# touched; 22% of stopped-out positions were profitable 20 sessions later.
+# A stop set inside the noise of a mean-reversion entry liquidates exactly
+# when the thesis is strongest. Stopping at 4x rather than 6x is deliberate:
+# past 4x the PF curve is nearly flat while the worst single trade keeps
+# growing (-19.2% at 2x, -31.4% at 4x, -35.5% at 6x).
+TARGET_ATR_MULT = 2.0
+STOP_ATR_MULT = 4.0
+
+# ── portfolio caps ───────────────────────────────────────────────────────
+# Nothing counted open positions before 2026-09-04; the paper book peaked at
+# 78 concurrent rows and held 7 Adani-group names on the day it lost 60.7
+# points. The portfolio arithmetic behind the 4x stop assumes 10 positions.
+MAX_CONCURRENT = 10      # total funded positions held at once
+MAX_PER_GROUP = 2        # per correlation group (core/symbol_groups.py)
+
 
 def _rsi(series: pd.Series, n: int = 2) -> pd.Series:
     d = series.diff()
@@ -95,7 +121,7 @@ def screen(data: dict, learner: SwingLearner = None, regime_state: str = "risk_o
         m2, m5v = ma200.iloc[-1], ma5.iloc[-1]
         if pd.isna(a) or pd.isna(m2):
             continue
-        tgt_pct = 2 * a / c * 100
+        tgt_pct = TARGET_ATR_MULT * a / c * 100
         if tgt_pct < MIN_TARGET_PCT:
             continue
 
@@ -116,8 +142,8 @@ def screen(data: dict, learner: SwingLearner = None, regime_state: str = "risk_o
             cands.append({
                 "symbol": sym, "direction": direction, "signal": signal,
                 "close": round(float(c), 2),
-                "target": round(float(c + sign * 2 * a), 2),
-                "stop": round(float(c - sign * 2 * a), 2),
+                "target": round(float(c + sign * TARGET_ATR_MULT * a), 2),
+                "stop": round(float(c - sign * STOP_ATR_MULT * a), 2),
                 "target_pct": round(float(tgt_pct), 2),
                 "weight": w,
                 "rank": round(float(tgt_pct) * w, 2),
@@ -125,6 +151,71 @@ def screen(data: dict, learner: SwingLearner = None, regime_state: str = "risk_o
             })
     cands.sort(key=lambda x: -x["rank"])
     return cands
+
+
+def open_funded_symbols() -> list:
+    """Symbols already held on the FUNDED side, from the paper journal.
+
+    Bench rows are excluded on purpose: they consume no capital, so capping
+    against them would starve the funded book of the very trades the caps are
+    meant to protect."""
+    if not os.path.exists(JOURNAL_FILE):
+        return []
+    out = []
+    for line in open(JOURNAL_FILE, encoding="utf-8"):
+        try:
+            r = json.loads(line)
+        except Exception:
+            continue
+        if r.get("status") == "open" and r.get("fundable"):
+            out.append(r["symbol"])
+    return out
+
+
+def apply_portfolio_caps(cands: list, held: list) -> list:
+    """Demote fundable candidates that breach a portfolio cap.
+
+    Three caps, applied to candidates in rank order (highest rank keeps the
+    slot). Each is a distinct failure seen in the 2026-08-31 book:
+
+      one per symbol  -- that book held six symbols twice, entered from two
+                         different signals, and stopped out of both legs.
+      MAX_PER_GROUP   -- it also held seven Adani-group names, which is one
+                         bet wearing seven tickets (core/symbol_groups.py).
+      MAX_CONCURRENT  -- and peaked at 78 concurrent rows, against portfolio
+                         arithmetic that assumes 10.
+
+    Capped candidates are set fundable=False with a `cap_reason`, so they
+    still reach the paper bench and the learner. Nothing is silently dropped,
+    and the reason is journaled so the cap's own cost stays measurable.
+    Returns the surviving funded list; mutates candidates in place."""
+    from core.symbol_groups import group_of
+
+    slots = MAX_CONCURRENT - len(held)
+    per_group: dict = {}
+    for s in held:
+        per_group[group_of(s)] = per_group.get(group_of(s), 0) + 1
+    seen = set(held)
+
+    kept = []
+    for x in cands:
+        if not x.get("fundable"):
+            continue
+        sym, grp = x["symbol"], group_of(x["symbol"])
+        if sym in seen:
+            reason = "already held"
+        elif per_group.get(grp, 0) >= MAX_PER_GROUP:
+            reason = f"group {grp} at cap {MAX_PER_GROUP}"
+        elif len(kept) >= slots:
+            reason = f"book at cap {MAX_CONCURRENT} ({len(held)} held)"
+        else:
+            seen.add(sym)
+            per_group[grp] = per_group.get(grp, 0) + 1
+            kept.append(x)
+            continue
+        x["fundable"] = False
+        x["cap_reason"] = reason
+    return kept
 
 
 def journalable(cands: list, regime_state: str) -> list:
@@ -209,7 +300,12 @@ def main() -> int:
     for x in cands:
         x["fundable"] = (x["direction"] == "long"
                          and regime_state == "risk_on" and not retired)
-    funded = [x for x in cands if x["fundable"]]
+    # Portfolio caps run AFTER the direction/regime gate and BEFORE anything
+    # is called funded: one per symbol, MAX_PER_GROUP per correlation group,
+    # MAX_CONCURRENT in the book. Added 2026-09-04 — see apply_portfolio_caps.
+    held = open_funded_symbols()
+    funded = apply_portfolio_caps(cands, held)
+    capped = [x for x in cands if x.get("cap_reason")]
     bench = [x for x in cands if not x["fundable"]]
     funded_action = ("long" if funded else "stand_aside")
 
@@ -228,6 +324,13 @@ def main() -> int:
                "risk-off regime - shorts are net-negative over 15y, not funded")
         print(f"\nFUNDED ACTION: NONE - STAND ASIDE ({why}).")
         print("Cash sits per the allocation engine. No funded swing trades today.")
+
+    if capped:
+        print(f"\nBLOCKED BY PORTFOLIO CAP: {len(capped)} setups "
+              f"({len(held)} funded positions already open, cap {MAX_CONCURRENT})")
+        for i, x in enumerate(capped[:10], 1):
+            print(f"{i:>2} {x['symbol']:<13}{x['direction']:<6}"
+                  f"{x['signal']:<18}-> {x['cap_reason']}")
 
     if bench:
         print(f"\nPAPER BENCH (learner only - DO NOT FUND): {len(bench)} setups")

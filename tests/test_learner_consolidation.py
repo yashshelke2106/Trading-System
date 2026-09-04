@@ -9,7 +9,7 @@ import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from core.swing_learner import MIN_N, SwingLearner
+from core.swing_learner import MIN_N, SwingLearner, _wilson
 
 SIGNALS = ["rsi2_oversold", "3_down_days", "2pct_under_5dma"]
 
@@ -43,14 +43,43 @@ def test_below_gate_stays_neutral():
     if os.path.exists(sf): os.remove(sf)
 
 
-def test_direction_symmetry_preserved():
+def test_posterior_arithmetic_is_direction_symmetric():
+    """The original invariant, narrowed on 2026-09-04.
+
+    Identical evidence must still produce an identical POSTERIOR for a long
+    and a short bucket — no direction gets a different prior, update rule, or
+    Wilson bound. What changed is downstream: the short side's rank WEIGHT is
+    pinned (see test_short_weight_is_frozen below), so the learner still
+    measures shorts honestly and simply declines to act on the measurement."""
     sf = os.path.join(tempfile.gettempdir(), "_lc3.json")
     L = _fresh(sf)
     for _ in range(30):
         L.record("long", "rsi2_oversold", "risk_on", True, 0.01)
         L.record("short", "rsi2_overbought", "risk_off", True, 0.01)
-    assert (L.weight("long", "rsi2_oversold", "risk_on")
-            == L.weight("short", "rsi2_overbought", "risk_off"))
+    lb = L.buckets["long|risk_on"]
+    sb = L.buckets["short|risk_off"]
+    for field in ("wins", "losses", "n", "sum_ret"):
+        assert lb[field] == sb[field], f"{field} diverged by direction"
+    assert _wilson(lb["wins"], lb["n"]) == _wilson(sb["wins"], sb["n"])
+    if os.path.exists(sf): os.remove(sf)
+
+
+def test_short_weight_is_frozen_and_long_is_not():
+    """The 2026-09-04 asymmetry, asserted explicitly so it stays deliberate.
+
+    Rationale (short_side_policy.md): 6,188 short signals re-resolved under
+    ten exit policies came out negative in every one, PF 0.68-0.83. The live
+    bucket meanwhile read 71% wins on 28 trades and was boosting short ranks —
+    weight() scores win rate, which is exactly what a low-payoff short book
+    flatters. If this test ever fails, the freeze was removed; re-read the
+    evidence before accepting that."""
+    sf = os.path.join(tempfile.gettempdir(), "_lc3b.json")
+    L = _fresh(sf)
+    for _ in range(30):
+        L.record("long", "rsi2_oversold", "risk_on", True, 0.01)
+        L.record("short", "rsi2_overbought", "risk_off", True, 0.01)
+    assert L.weight("long", "rsi2_oversold", "risk_on") > 1.0
+    assert L.weight("short", "rsi2_overbought", "risk_off") == 1.0
     if os.path.exists(sf): os.remove(sf)
 
 
