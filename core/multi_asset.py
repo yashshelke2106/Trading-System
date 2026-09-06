@@ -57,9 +57,18 @@ UNIVERSE: Dict[str, tuple] = {
     "IEF":      ("RATES US7-10y",  "rates",     False),
     "TLT":      ("RATES US20y+",   "rates",     False),
     "HYG":      ("CREDIT HY",      "credit",    False),
-    "EURUSD=X": ("FX EUR",         "fx",        False),
-    "JPY=X":    ("FX JPY",         "fx",        False),
-    "GBPUSD=X": ("FX GBP",         "fx",        False),
+    # NAME THE PAIR, NOT THE CURRENCY. EURUSD and GBPUSD are quoted USD-per-
+    # unit; JPY=X is USDJPY, quoted the other way up. Labelling all three
+    # "FX <currency>" made "long FX JPY" read as long the yen when the series
+    # rising means the yen FALLING — a silent inversion of exactly the shape
+    # that has bitten this repo before. Trend-following is indifferent to the
+    # convention (a trend is a trend either way, so the H-022 statistics are
+    # unaffected), but anyone executing the screen would have taken the JPY
+    # leg backwards. The fund universe below sidesteps this entirely by
+    # holding FXY, which tracks the yen itself.
+    "EURUSD=X": ("FX EURUSD",      "fx",        False),
+    "JPY=X":    ("FX USDJPY",      "fx",        False),
+    "GBPUSD=X": ("FX GBPUSD",      "fx",        False),
     "GC=F":     ("CMDY Gold",      "commodity", True),
     "SI=F":     ("CMDY Silver",    "commodity", True),
     "CL=F":     ("CMDY Crude",     "commodity", True),
@@ -69,6 +78,33 @@ UNIVERSE: Dict[str, tuple] = {
     "BTC-USD":  ("CRYPTO BTC",     "crypto",    False),
 }
 
+# What the PAPER FUND actually holds. The research series above are index and
+# futures quotes; you cannot buy those. These are the USD-denominated ETFs a
+# retail account reached through LRS would really trade, so signal and
+# execution run on the SAME instrument and no tracking error is assumed away.
+# Everything is USD, which also removes the currency mismatch in the research
+# set (^NSEI is quoted in INR).
+FUND_UNIVERSE: Dict[str, tuple] = {
+    "SPY":  ("EQ US",         "equity",    False),
+    "EWJ":  ("EQ Japan",      "equity",    False),
+    "EWG":  ("EQ Germany",    "equity",    False),
+    "EEM":  ("EQ EM",         "equity",    False),
+    "INDA": ("EQ India",      "equity",    False),
+    "IEF":  ("RATES US7-10y", "rates",     False),
+    "TLT":  ("RATES US20y+",  "rates",     False),
+    "HYG":  ("CREDIT HY",     "credit",    False),
+    "FXE":  ("FX EUR",        "fx",        False),
+    "FXY":  ("FX JPY",        "fx",        False),
+    "FXB":  ("FX GBP",        "fx",        False),
+    "GLD":  ("CMDY Gold",     "commodity", False),
+    "SLV":  ("CMDY Silver",   "commodity", False),
+    "USO":  ("CMDY Crude",    "commodity", False),
+    "CPER": ("CMDY Copper",   "commodity", False),
+    "UNG":  ("CMDY NatGas",   "commodity", False),
+    "CORN": ("CMDY Corn",     "commodity", False),
+    "IBIT": ("CRYPTO BTC",    "crypto",    False),
+}
+
 LOOKBACK = 252        # 12-month time-series momentum
 VOL_TARGET = 0.10     # 10% annualised vol per sleeve
 VOL_LOOKBACK = 60     # trading days of trailing vol
@@ -76,22 +112,24 @@ MAX_GROSS = 3.0       # cap on total gross exposure
 COST_BPS = 10.0       # round-trip cost charged on turnover
 
 
-def fetch(period: str = "3y") -> pd.DataFrame:
+def fetch(period: str = "3y", universe: Dict[str, tuple] = None) -> pd.DataFrame:
     """Daily closes for the universe. yfinance, adjusted."""
     import yfinance as yf
-    raw = yf.download(list(UNIVERSE), period=period, interval="1d",
+    universe = universe or UNIVERSE
+    raw = yf.download(list(universe), period=period, interval="1d",
                       auto_adjust=True, progress=False, threads=True)
     px = raw["Close"].ffill(limit=5)
     keep = [c for c in px.columns if px[c].notna().sum() > len(px) * 0.85]
     return px[keep].dropna(how="all")
 
 
-def signals(px: pd.DataFrame) -> List[Dict]:
+def signals(px: pd.DataFrame, universe: Dict[str, tuple] = None) -> List[Dict]:
     """Today's target book. One row per market, point-in-time.
 
     Sizing is inverse trailing volatility toward VOL_TARGET, capped at 1x per
     sleeve and MAX_GROSS in aggregate. `direction` is the sign of the trailing
     LOOKBACK return. Both use data through the last complete bar only."""
+    universe = universe or UNIVERSE
     if len(px) < LOOKBACK + 2:
         raise ValueError(f"need > {LOOKBACK + 2} bars, got {len(px)}")
 
@@ -107,7 +145,7 @@ def signals(px: pd.DataFrame) -> List[Dict]:
 
     out: List[Dict] = []
     for t in px.columns:
-        name, cls, india = UNIVERSE[t]
+        name, cls, india = universe[t]
         w = float(raw_w.get(t, 0.0)) * scale
         if not np.isfinite(w):
             w = 0.0

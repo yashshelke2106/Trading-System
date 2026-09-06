@@ -21,7 +21,7 @@ import { usePathname } from "next/navigation"
 // place instead of smeared across every tab.
 
 export interface Section {
-  id: "swing" | "live"
+  id: "fund" | "swing" | "live"
   href: string
   label: string
   blurb: string
@@ -30,6 +30,21 @@ export interface Section {
 
 export const SECTIONS: Section[] = [
   {
+    // FUND leads (2026-09-06). The desk's active book is the paper macro fund
+    // under H-022 — the first hypothesis in the programme to clear a matched
+    // null. Swing stays because its research is still worth reading, but it
+    // is no longer what the desk is running, and a nav that opened on it kept
+    // implying otherwise.
+    id: "fund",
+    href: "/fund",
+    label: "Fund",
+    blurb: "paper, live market",
+    tabs: [
+      { href: "/fund",       label: "Book"       },
+      { href: "/allocation", label: "Allocation" },
+    ],
+  },
+  {
     id: "swing",
     href: "/swing",
     label: "Swing",
@@ -37,7 +52,6 @@ export const SECTIONS: Section[] = [
     tabs: [
       { href: "/swing",      label: "Overview"   },
       { href: "/verdict",    label: "Verdict"    },
-      { href: "/allocation", label: "Allocation" },
       { href: "/accuracy",   label: "Accuracy"   },
       { href: "/journal",    label: "Journal"    },
       { href: "/portfolio",  label: "Portfolio"  },
@@ -55,13 +69,22 @@ export const SECTIONS: Section[] = [
   },
 ]
 
-// Routes that belong to the Live section. Everything else falls to Swing,
-// so a new no-API page is picked up without touching this map.
+// Explicit route -> section maps. Swing is the fallback, so a new no-API
+// research page is picked up without touching either map. /allocation moved
+// to Fund on 2026-09-06: it is where capital is actually deployed, which is a
+// fund question, not a swing-research one. A route must appear in ONE
+// section's tabs or the highlight is ambiguous.
+const FUND_ROUTES = ["/fund", "/allocation"]
 const LIVE_ROUTES = ["/live"]
 
+const matches = (pathname: string, routes: string[]) =>
+  routes.some(r => pathname === r || pathname.startsWith(r + "/"))
+
 export function sectionFor(pathname: string): Section {
-  const isLive = LIVE_ROUTES.some(r => pathname === r || pathname.startsWith(r + "/"))
-  return SECTIONS[isLive ? 1 : 0]
+  const byId = (id: Section["id"]) => SECTIONS.find(s => s.id === id)!
+  if (matches(pathname, FUND_ROUTES)) return byId("fund")
+  if (matches(pathname, LIVE_ROUTES)) return byId("live")
+  return byId("swing")
 }
 
 export default function SectionNav() {

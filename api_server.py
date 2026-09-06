@@ -1139,6 +1139,62 @@ async def get_account():
         return {"ok": False, "reason": str(e)}
 
 
+@app.get("/api/macro-fund")
+async def get_macro_fund():
+    """The paper macro fund — the cross-asset trend sleeve as a real book.
+
+    Distinguish it from its neighbours, which answer different questions and
+    will not agree:
+
+      /api/signals      what does the equity scanner see right now?
+      /api/account      the Rs 10L equity/options book — a cash ledger.
+      /api/macro-fund   a USD notional book across 18 global markets.
+
+    This one holds NOTIONAL exposure financed by margin, so gross exposure
+    exceeds NAV by design (up to 3x). Its invariant is
+    NAV == capital + realised + unrealised, not a cash ledger — see
+    core/macro_fund.py for why enforcing the equity book's invariant here
+    would be wrong rather than safe.
+
+    `mature` is false until the H-022 pre-registered window closes on
+    2027-09-05. Until then every number here is a progress indicator, not a
+    verdict, and the UI is expected to say so.
+
+    Read-only. Reset and cycle stay on the CLI (`python macro_task.py`) so a
+    stray GET cannot wipe the book.
+    """
+    def _load():
+        from core import macro_fund as mf
+        state = mf.load_state()
+        if not state:
+            return {"ok": False, "reason": "no book yet — run: python macro_task.py"}
+        perf = mf.performance(state)
+        exp = mf.exposure(state)
+        return _json_safe({
+            "ok": True,
+            "mode": state.get("mode", "PAPER"),
+            "hypothesis": state.get("hypothesis", "H-022"),
+            "base_currency": state.get("base_currency", "USD"),
+            "started": state.get("started"),
+            "last_mark": state.get("last_mark"),
+            "last_rebalance": state.get("last_rebalance"),
+            "performance": perf,
+            "exposure": exp,
+            "positions": sorted(state.get("positions", []),
+                                key=lambda p: -abs(float(p.get("market_value") or 0))),
+            "closed": state.get("closed", [])[:40],
+            "curve": state.get("curve", [])[-400:],
+            "note": state.get("note", ""),
+        })
+
+    try:
+        return await _run(lambda: _cached("macro_fund", 30, _load))
+    except RunTimeout as e:
+        return {"ok": False, "reason": str(e)}
+    except Exception as e:
+        return {"ok": False, "reason": str(e)}
+
+
 @app.get("/api/paper-book")
 async def get_paper_book():
     """Forward paper run of the 50/50 swing book.
